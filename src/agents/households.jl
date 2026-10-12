@@ -17,17 +17,16 @@ end
 function v(n, household::Household)
     household.ν * n^(1 + household.ϕ) / (1 + household.ϕ)
 end
-
 function v′(n, household::Household)
     household.ν * n^household.ϕ
 end
 
+"Labour supply given wage `ω`"
 function n(ω, household::Household)
-    (ω / household.ν)^(1 / household.ϕ)
+    (ω / household.ν)^inv(household.ϕ)
 end
-
 function n′(ω, household::Household)
-    inv(household.ϕ) * (ω / household.ν)^(inv(household.ϕ) - 1)
+    ((ω / household.ν)^(1 / household.ϕ - 1)) / household.ϕ
 end
 
 # Sepcialise methods for φ = 1
@@ -39,7 +38,6 @@ end
 function v(n, household::LinearHousehold)
     household.ν * n^2 / 2
 end
-
 function v′(n, household::LinearHousehold)
     household.ν * n
 end
@@ -47,7 +45,6 @@ end
 function n(ω, household::LinearHousehold)
     ω / household.ν
 end
-
-function n′(::T, household::LinearHousehold) where T
+function n′(household::LinearHousehold)
     inv(household.ν)
 end

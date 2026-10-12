@@ -84,11 +84,11 @@ function noncommittedtax(∂ᵩW, ∂ᵩᵩW, φ, τᶜ, signal::Signal, governm
         return zero(taxcoefficient + τᶜ)
     end
 
-    return taxcoefficient * τᶜ / (government.r * government.δ + taxcoefficient)
+    return taxcoefficient * τᶜ / (household.r * government.δ + taxcoefficient)
 end
 
 function fullgeneratorhamiltonian(τ, taxcoefficient, τᶜ, government::Government)
-    government.r * government.δ * τ^2 / 2 +
+    household.r * government.δ * τ^2 / 2 +
         taxcoefficient * (τᶜ - τ)^2 / 2
 end
 
@@ -96,7 +96,7 @@ end
 function noncommittedtax(∂ᵩW, ∂ᵩᵩW, φ, τᶜ, signal::Signal, government::Government, taxmethod::FullGeneratorTax)
     taxcoefficient = noncommittedtaxcoefficient(∂ᵩW, ∂ᵩᵩW, φ, signal, taxmethod)
     
-    curvature = government.r * government.δ + taxcoefficient
+    curvature = household.r * government.δ + taxcoefficient
     zerotax = zero(taxcoefficient + τᶜ + taxmethod.upperbound)
     upperbound = zerotax + taxmethod.upperbound
 
@@ -119,7 +119,7 @@ end
 function noncommittedtaxresidual(τ, ∂ᵩW, ∂ᵩᵩW, φ, τᶜ, signal::Signal, government::Government, taxmethod::NonCommittedTaxMethod)
     taxcoefficient = noncommittedtaxcoefficient(∂ᵩW, ∂ᵩᵩW, φ, signal, taxmethod)
 
-    return government.r * government.δ * τ - taxcoefficient * (τᶜ - τ)
+    return household.r * government.δ * τ - taxcoefficient * (τᶜ - τ)
 end
 
 
@@ -165,7 +165,7 @@ function noncommittedtaxgap(τ, taxcoefficient, τᶜ, government::Government, m
         fullgeneratorhamiltonian(upperbound, taxcoefficient, τᶜ, government)
     )
 
-    curvature = government.r * government.δ + taxcoefficient
+    curvature = household.r * government.δ + taxcoefficient
 
     if curvature > 0
         stationarytax = clamp(taxcoefficient * τᶜ / curvature, zerotax, upperbound)
@@ -389,7 +389,7 @@ function noncommittedpolicies(x, parameters::NonCommittedParameters, s)
 
         beliefvalue[i, j, k] = -φ * (1 - φ) * ∂ᵩW
         taxcoefficient[i, j, k] = noncommittedtaxcoefficient(∂ᵩW, ∂ᵩᵩW, φ, signal, taxmethod)
-        taxcurvature[i, j, k] = government.r * government.δ + taxcoefficient[i, j, k]
+        taxcurvature[i, j, k] = household.r * government.δ + taxcoefficient[i, j, k]
         investment[i, j, k] = investmentpolicy(q, a, firm)
         tax[i, j, k] = noncommittedtax(∂ᵩW, ∂ᵩᵩW, φ, τᶜₜ, signal, government, taxmethod)
         expectedtax[i, j, k] = expectedtax(φ, tax[i, j, k], τᶜₜ)

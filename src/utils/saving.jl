@@ -27,8 +27,6 @@ function solutionlabel(household::AbstractHousehold, firm::Firm, climate::Climat
         dynamicsolutionlabel(household, firm),
         "r$(parameterstring(household.r))",
         "gamma$(parameterstring(climate.γ))",
-        "zeta$(parameterstring(climate.ζ))",
-        "m0$(parameterstring(climate.m₀))",
     ), "_")
 end
 

@@ -116,7 +116,7 @@ function initmodels(args = ARGS)
     household = Household(; householdkwargs...)
 
     signal = Signal(; parameterkwargs(parsed, (:ϵ, :σ))...)
-    climate = Climate(; parameterkwargs(parsed, (:γ, :ζ, :m₀))...)
+    climate = Climate(; parameterkwargs(parsed, (:γ, ))...)
 
     return household, firm, signal, climate
 end

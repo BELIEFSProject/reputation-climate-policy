@@ -67,56 +67,59 @@ if isfile(filename)
     throw("Committed solution in $filename already saved! Breaking to avoid overwriting.")
 end
 
-## Define and hot-start ODE problem
-x₀ = initialguess(SA.MVector, model)
-odeproblem = ODE.ODEProblem(ODE.ODEFunction{true}(driftcommitted!), x₀, (0., 1.), model)
-
-z₀ = SA.MVector{7}(x₀..., 0.)
-welfareproblem = ODE.ODEProblem(ODE.ODEFunction{true}(driftwelfarecommitted!), z₀, (0., 1.), model)
-
-ODE.solve(odeproblem)
-ODE.solve(welfareproblem)
-
 ## Solver
-lb, ub = optimisationbounds(model)
+x₀ = initialguess(SA.MVector, model)
+odefn = ODE.ODEFunction{true}(driftcommitted!)
+odeproblem = ODE.ODEProblem(ODE.ODEFunction{true}(driftcommitted!), x₀, (0., 1.), model)
+lb, ub = bvpbounds(model)
 bcresid_prototype = (initialcondition(x₀, model), terminalcondition(x₀, model))
 
 bvpfunction = SciMLBase.BVPFunction(driftcommitted!, (initialcondition!, terminalcondition!); bcresid_prototype, twopoint = Val(true))
-bvproblem = BVP.TwoPointBVProblem(bvpfunction, ODE.solve(odeproblem, defodealg), odeproblem.tspan, model; lb, ub)
+horizons = (5., 10., 20., 50., 100.)
+solutionguess = ODE.solve(odeproblem, ODE.Rosenbrock23(); tspan = (0., horizons[1]))
 
-BVP.solve(bvproblem, defbvpalg; dt = 0.01)
+for T in horizons
+    bvproblem = BVP.TwoPointBVProblem(bvpfunction, solutionguess, (0., T), model; lb, ub)
+    candidate = BVP.solve(bvproblem, BVP.MIRK4(); dt = T * 1e-2)
+    SciMLBase.successful_retcode(candidate) || error("Committed BVP failed at T = $T with return code $(candidate.retcode).")
 
-## Solve
-objectivewelfare(100., bvproblem, welfareproblem, odeproblem, model)
-optimisationparameters = (bvproblem, welfareproblem, odeproblem, model, 0.05, defbvpalg, defodealg);
+    if !isnothing(bvpsol)
+        commondomain = range(0., bvpsol.t[end], length = 101)
+        horizonerror = maximum(LA.norm(candidate(t) - bvpsol(t), Inf) for t in commondomain)
+        @printf "Horizon %5.1f: maximum change on [0, %5.1f] = %.3e\n" T bvpsol.t[end] horizonerror
+    end
 
-optsol = Optim.optimize(Base.Fix2(objectivewelfare, optimisationparameters), 0., 150., Optim.Brent())
-T = optsol.minimizer
-optimalpath = BVP.solve(bvproblem, defbvpalg; u0 = ODE.solve(odeproblem, defodealg; tspan = T), dt = 1e-2T, tspan = (0., T))
+    bvpsol = candidate
+end
 
+optimalpath = bvpsol
+T = last(horizons)
 taxpath = map(Base.Fix2(committedtax, model), optimalpath.u)
 ts = optimalpath.t
+
+initialresidual = initialcondition(first(optimalpath.u), model)
+terminalresidual = terminalcondition(last(optimalpath.u), model)
+boundaryerror = max(LA.norm(initialresidual, Inf), LA.norm(terminalresidual, Inf))
+@printf "Maximum boundary residual: %.3e\n" boundaryerror
 
 ## Illustrate solution
 if isinteractive()
     Plots.default(linewidth = 5)
-    cumulativeemissionspath = getindex.(optimalpath.u, 1)
-    abatementpath = getindex.(optimalpath.u, 2)
+    abatementpath = getindex.(optimalpath.u, 1)
+    marginalvaluepath = getindex.(optimalpath.u, 2)
 
     taxfig = Plots.plot(ts, taxpath ./ taxfactor; c = :black, xlabel = "Year", ylabel = L"Policy [USD / tCO$_2$]", xlims = (0, T), margins = 6Plots.mm, label = L"\tau^c")
 
-    wagepath = map(Base.Fix2(ω, firm), taxpath)
-    labourpath = map(Base.Fix2(n, household), wagepath)
-    temperaturepath = climate.ζ .* cumulativeemissionspath
+    labourpath = map((τ, a) -> n(τ, a, household, firm), taxpath, abatementpath)
     outputpath = firm.A .* labourpath
 
-    temperaturefig = Plots.plot(ts, temperaturepath; c = :darkred, ylabel = L"Temperature [$^\circ$C]", xlims = (0, T), margins = 6Plots.mm, label = L"\zeta m_t")
+    marginalvaluefig = Plots.plot(ts, marginalvaluepath; c = :darkred, ylabel = L"Marginal value $q$", xlims = (0, T), margins = 6Plots.mm, label = L"q")
 
-    abatementfig = Plots.plot(ts, abatementpath; c = :darkgreen, ylabel = L"Abatement [GtCO$_2$e / year]", xlims = (0, T), margins = 6Plots.mm, label = L"a")
+    abatementfig = Plots.plot(ts, abatementpath; c = :darkgreen, ylabel = L"Emissions-intensity reduction", xlims = (0, T), margins = 6Plots.mm, label = L"a")
 
     outputfig = Plots.plot(ts, outputpath; c = :darkblue, xlabel = "Year", ylabel = "Output [trillion USD / year]", xlims = (0, T), margins = 6Plots.mm, label = L"y_t")
 
-    solutionfig = Plots.plot(taxfig, temperaturefig, abatementfig, outputfig; layout = (2, 2), size = (1000., 800.))
+    solutionfig = Plots.plot(taxfig, marginalvaluefig, abatementfig, outputfig; layout = (2, 2), size = (1000., 800.))
 
 end
 

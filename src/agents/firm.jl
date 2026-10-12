@@ -12,24 +12,30 @@ end
 function y(n, firm::Firm)
     n * firm.A
 end
-
-function ω(τ, firm::Firm)
-    firm.A * (1 - firm.η * τ)
+function y′(firm::Firm)
+    firm.A
 end
-function ω′(_, firm::Firm)
-    -firm.A * firm.η
+
+function emissivity(a, firm::Firm)
+    max(firm.η - a, 0)
+end
+function emissivity′(a, firm)
+    ifelse(firm.η > a, -1, 0)
+end
+
+"Firm's wage offer"
+function ω(τ, a, firm::Firm)
+    firm.A * (1 - emissivity(a, firm) * τ)
+end
+function ∂ₜω(a, firm::Firm)
+    -firm.A * emissivity(a, firm)
+end
+function ∂ₐω(τ, a, firm::Firm)
+    -firm.A * τ * emissivity′(a, firm)
 end
 
 function e(n, a, firm::Firm)
-    firm.η * y(n, firm) - a
-end
-
-function e′(τ, household::AbstractHousehold, firm::Firm)
-    firm.η * y(n′(τ, household, firm), firm)
-end
-
-function 𝒦(τ, household::AbstractHousehold, firm::Firm)
-    -e′(τ, household, firm)
+    emissivity(a, firm) * y(n, firm)
 end
 
 function c(a, firm::Firm)
@@ -39,25 +45,35 @@ end
 c′(firm::Firm) = firm.κ
 c′(_, firm::Firm) = c′(firm)
 
-function k(a, u, firm::Firm)
-    c(a, firm) * u + firm.ξ * u^2 / 2
+function k(a, ȧ, firm::Firm)
+    c(a, firm) * ȧ + firm.ξ * ȧ^2 / 2
+end
+function ∂ₐk(ȧ, firm::Firm)
+    ȧ * firm.κ
 end
 
-function adjustmenthorizon(firm::Firm)
-    slope = household.r * c′(firm)
-
-    return (
-        household.r * firm.ξ + √((household.r * firm.ξ)^2 + 4slope * firm.ξ)
-    ) / (2slope)
+## Equilibrium
+"Equilibrium labour demand given tax `τ` and abatement `a`."
+function n(τ, a, household::AbstractHousehold, firm::Firm)
+    n(ω(τ, a, firm), household)
 end
 
-function δ(firm::Firm)
-    @unpack r, κ, ξ = firm
-
-    (√(r^2 + 4r * κ / ξ) - r) / 2
+function ∂ₜn(τ, a, household::Household, firm::Firm)
+    n′(ω(τ, a, firm), household) * ∂ₜω(a, firm)
+end
+function ∂ₜn(a, household::LinearHousehold, firm::Firm)
+    n′(household) * ∂ₜω(a, firm)
 end
 
-function α(q, a, firm::Firm)
+function ∂ₐn(τ, a, household::Household, firm::Firm)
+    n′(ω(τ, a, firm), household) * ∂ₐω(τ, a, firm)
+end
+
+function ∂ₐn(τ, a, household::LinearHousehold, firm::Firm)
+    n′(household) * ∂ₐω(τ, a, firm)
+end
+
+function α(q, a, household::AbstractHousehold, firm::Firm)
     da = ((q / household.r) - c(a, firm)) / firm.ξ
 
     return max(da, 0)

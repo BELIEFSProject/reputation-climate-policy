@@ -1,7 +1,12 @@
-function w(τ, m, a, u, household::AbstractHousehold, firm::Firm, climate::Climate)
-    wage = ω(τ, firm)
-    labour = n(wage, household)
-    output = y(labour, firm) * (1 - d(m, climate))
+function w(τ, a, ȧ, household::AbstractHousehold, firm::Firm, climate::Climate)
+    labour = n(τ, a, household, firm)
+    damages = d(e(labour, a, firm), climate)
 
-    return k(a, u, firm) + v(labour, household) - output
+    return k(a, ȧ, firm) + v(labour, household) - y(labour, firm) * (1 - damages)
+end
+
+function statictax(a, household::AbstractHousehold, firm::Firm, climate::Climate)
+    res = Optim.optimize(τ -> w(τ, a, 0, household, firm, climate), 0, inv(firm.η), Optim.Brent())
+
+    return Optim.minimizer(res)
 end

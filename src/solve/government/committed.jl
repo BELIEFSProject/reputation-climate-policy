@@ -1,17 +1,22 @@
 ## Optimal tax
 committedtaxresidual(τ, (x, model)) = committedtaxresidual(τ, x, model)
-function committedtaxresidual(τ, x, model::AbstractModelParameters)
+function committedtaxresidual(τ, x, model::ModelParameters)
     @unpack household, firm, climate = model
-    m, _, _, λₘ, _, λᵨ = x # State, co-state, cumulative costs (z, λ, u)
+    a, _, _, λᵨ = x
 
-    wage = ω(τ, firm)
+    labourwedge = emissivity(a, firm) * τ
+    marginaldamages = 2climate.γ * e(n(τ, a, household, firm), a, firm)
 
-    return firm.A * n′(wage, household) * ω′(τ, firm) * (d(m, climate) + firm.η * ( λₘ - τ )) - household.r * λᵨ
+    investment = τ + n(τ, a, household, firm) / ∂ₜn(τ, a, household, firm)
+
+    return labourwedge + investment * household.r * λᵨ - marginaldamages
 end
-function committedtax(x::TX, model::AbstractModelParameters) where {T, TX <: AbstractVector{T}}
-    𝟎 = zero(T)
+function committedtax(x::TX, model::ModelParameters) where {T, TX <: AbstractVector{T}}
+    𝟎 = zero(x[1])
 
-    taxupperbound = (1 - √eps(T)) / model.firm.η
+    ϵ = emissivity(x[1], model.firm)
+    iszero(ϵ) && return 𝟎
+    taxupperbound = (one(ϵ) - √eps(typeof(model.firm.η))) / model.firm.η
     foc = Base.Fix2(committedtaxresidual, (x, model))
 
     fl = foc(𝟎)
@@ -27,141 +32,129 @@ function committedtax(x::TX, model::AbstractModelParameters) where {T, TX <: Abs
 end
 function committedtax(x::TX, model::LinearLabourModelParameters) where {T, TX <: AbstractVector{T}}
     @unpack household, firm, climate = model
-    m, _, _, λₘ, _, λᵨ = x # State, co-state, cumulative costs (z, λ, u)
+    a, _, _, λᵨ = x
+    ϵ = emissivity(a, firm)
+    if ϵ ≈ 0
+        return zero(a)
+    end
 
-    interiortax = (d(m, climate) / firm.η) + λₘ + household.r * household.ν * λᵨ / (firm.A * firm.η)^2
+    num = (2climate.γ * firm.A^2 * ϵ / household.ν) + household.r * λᵨ / ϵ
+    den = ϵ + 2household.r * λᵨ + 2climate.γ * firm.A^2 * ϵ^2 / household.ν
 
-    return clamp(interiortax, 0, inv(firm.η))
+    return clamp(num / den, 0, 1 / firm.η)
+end
+
+function committedtail(a, model::LinearLabourModelParameters)
+    @unpack household, firm, climate = model
+
+    ϵ = emissivity(a, firm)
+    ϵ′ = emissivity′(a, firm)
+    levycoefficient = firm.A^2 / household.ν
+    marginalvalue = household.r * c(a, firm)
+    marginalvaluederivative = household.r * c′(a, firm)
+
+    damagecoefficient = 2climate.γ * levycoefficient
+    unconstrainedtax = clamp(damagecoefficient / (1 + damagecoefficient * ϵ), 0, 1 / firm.η)
+    unconstrainedmarginalvalue = levycoefficient * unconstrainedtax * (1 - ϵ * unconstrainedtax)
+
+    if unconstrainedmarginalvalue ≤ marginalvalue
+        tax = unconstrainedtax
+        taxderivative = -ϵ′ * tax^2
+        marginalvalue = unconstrainedmarginalvalue
+        marginalvaluederivative = levycoefficient * (taxderivative * (1 - 2ϵ * tax) - ϵ′ * tax^2)
+    else
+        discriminant = max(1 - 4ϵ * marginalvalue / levycoefficient, 0)
+        tax = clamp(2marginalvalue / (levycoefficient * (1 + √discriminant)), 0, 1 / firm.η)
+        taxderivative = (marginalvaluederivative + levycoefficient * ϵ′ * tax^2) / (levycoefficient * (1 - 2ϵ * tax))
+    end
+
+    labour = n(tax, a, household, firm)
+    labouraderivative = ∂ₐn(tax, a, household, firm)
+    labourtaxderivative = -firm.A * ϵ / household.ν
+    welfarewedge = 2climate.γ * e(labour, a, firm) - ϵ * tax
+    welfareaderivative = firm.A * welfarewedge * labouraderivative + climate.γ * (firm.A * labour)^2 * ϵ′
+    welfaretaxderivative = firm.A * welfarewedge * labourtaxderivative
+    valuegradient = (welfareaderivative + welfaretaxderivative * taxderivative) / household.r
+
+    return tax, marginalvalue, marginalvaluederivative, valuegradient
 end
 
 ## State-Costate system
 initialguess(model) = initialguess(SA.SVector, model)
-function initialguess(TV, model::AbstractModelParameters)
-    @unpack household, firm, climate = model
+function initialguess(TV, model::LinearLabourModelParameters)
+    @unpack firm = model
 
-    q₀ = τ₀
-    λₘ₀ = τ₀ - d(climate.m₀, climate) / firm.η
-    λₐ₀ = -q₀ / household.r
-    λᵨ₀ = zero(λₐ₀)
+    _, marginalvalue, _, valuegradient = committedtail(firm.a₀, model)
+    λᵨ₀ = zero(valuegradient)
 
-    return TV(climate.m₀, firm.a₀, q₀, λₘ₀, λₐ₀, λᵨ₀)
+    return TV(firm.a₀, marginalvalue, valuegradient, λᵨ₀)
 end
 
-function driftcommitted!(dx, x, model::AbstractModelParameters, t)
-    @unpack household, firm, climate = model 
-    m, a, q, λₘ, λₐ, λᵨ = x # State, co-state, cumulative costs (z, λ, u)
-    
+function driftcommitted!(dx, x, model::AbstractModelParameters, _)
+    @unpack household, firm, climate = model
+    a, q, λₐ, λᵨ = x
+
     τᶜ = committedtax(x, model)
-    wage = ω(τᶜ, firm)
-    labour = n(wage, household)
+    labour = n(τᶜ, a, household, firm)
+    labour′ = ∂ₐn(τᶜ, a, household, firm)
 
-    dm = firm.η * firm.A * labour - a
-    da = e(labour, a, firm) > 0 ? α(q, a, firm) : zero(a)
-    dq = household.r * (q - τᶜ + firm.κ * da)
+    isinvesting = q > household.r * c(a, firm) && a < firm.η
 
-    dλₘ = household.r * λₘ - firm.A * labour * d′(m, climate)
-    dλₐ = (household.r + firm.κ / firm.ξ) * λₐ + λₘ + (household.r*firm.κ^2 / firm.ξ) * λᵨ + (a * firm.κ^2 / firm.ξ)
-    dλᵨ = -firm.κ / firm.ξ * λᵨ - λₐ / (household.r * firm.ξ) - q / (household.r^2 * firm.ξ)
+    da = isinvesting ? α(q, a, household, firm) : zero(a)
+    dq = household.r * (q - firm.A * labour * τᶜ + firm.κ * da)
 
-    dx[1] = dm
-    dx[2] = da
-    dx[3] = dq
-    dx[4] = dλₘ
-    dx[5] = dλₐ
-    dx[6] = dλᵨ
-    
+    λₐwedge = isinvesting ?
+                (firm.κ / firm.ξ) * λₐ + (firm.κ^2 * a / firm.ξ) + household.r * λᵨ * firm.κ^2 / firm.ξ :
+                zero(a)
+
+    dλₐ = household.r * λₐ + climate.γ * (firm.A * labour)^2
+            - firm.A * (2climate.γ * e(labour, a, firm) - emissivity(a, firm) * τᶜ) * labour′
+            + household.r * λᵨ * (firm.A * τᶜ * labour′)
+            + λₐwedge
+
+    dλᵨ = isinvesting ?
+            -firm.κ / firm.ξ * λᵨ - λₐ / (household.r * firm.ξ) - q / (household.r^2 * firm.ξ) :
+            zero(a)
+
+    dx[1] = da
+    dx[2] = dq
+    dx[3] = dλₐ
+    dx[4] = dλᵨ
+
     return dx
-end
-
-## Truncation
-function ρd̄′(t, (τᶜ, x, model))
-    m, a = @view x[1:2]
-    wage = ω(τᶜ, model.firm)
-    labour = n(wage, model.household)
-    mₜ = m + e(labour, a, model.firm) * t
-
-    return d′(mₜ, model.climate) * exp(-model.household.r * t)
-end
-function tρd̄′(t, (τᶜ, x, model))
-    ρd̄′(t, (τᶜ, x, model)) * t
-end
-
-function ρd̄(t, (τᶜ, x, model))
-    m, a = @view x[1:2]
-    wage = ω(τᶜ, model.firm)
-    labour = n(wage, model.household)
-    mₜ = m + e(labour, a, model.firm) * t
-
-    return d(mₜ, model.climate) * exp(-model.household.r * t)
-end
-
-"Terminal gradient of the value function"
-function ∇v̄(x, model::AbstractModelParameters)
-    @unpack household, firm, climate = model
-    m, a, q = @view x[1:3]
-
-    wage = ω(q, firm)
-
-    output = firm.A * n(wage, household)
-    output′ = firm.A * n′(wage, household) * ω′(q, firm)
-    emissions = firm.η * output - a
-
-    ecds = climate.γ * climate.ζ^2
-
-    aₘ = ecds * m^2 / 2
-    bₘ = household.r + m * ecds * emissions
-    cₘ = ecds * emissions^2 / 2
-
-    Jₘ = J(aₘ, bₘ, cₘ)
-    Gₘ = G(aₘ, bₘ, cₘ)
-
-    ∂ₘv = output * ecds * (m * Jₘ + emissions * Gₘ)
-    ∂ₐv = -output * ecds * (m * Gₘ + emissions * L(aₘ, bₘ, cₘ))
-    ∂ᵨv = output′ * ((1 / household.r) - Jₘ - firm.η * ∂ₐv - firm.η * q / household.r)
-
-    return (∂ₘv, ∂ₐv, ∂ᵨv)
 end
 
 
 ## Outer Optimization
-optimisationbounds(model) = optimisationbounds(SA.SVector, model)
-function optimisationbounds(TV, model::AbstractModelParameters; λmax = Inf)
-    @unpack household, firm, climate = model
-  
-    q₀ = household.r * c(firm.a₀, firm)
+bvpbounds(model) = bvpbounds(SA.SVector, model)
+function bvpbounds(TV, model::AbstractModelParameters; λmax = Inf)
+    @unpack firm = model
 
-    lb = TV(climate.m₀, firm.a₀, q₀, -λmax, -λmax, -λmax)
-    ub = TV(climate.m₀, firm.a₀, λmax, λmax, λmax, λmax)
+    lb = TV(firm.a₀, zero(firm.a₀), -λmax, -λmax)
+    ub = TV(firm.η, λmax, λmax, λmax)
 
     return lb, ub
 end
 
 function initialcondition(x₀::TX, model::LinearLabourModelParameters) where {T, TX <: AbstractVector{T}}
-    initialcondition!(Vector{Float64}(undef, 3), x₀, model)
+    initialcondition!(Vector{Float64}(undef, 2), x₀, model)
 end
 function initialcondition!(res, x₀, model::LinearLabourModelParameters)
-    res[1] = x₀[1] - model.climate.m₀
-    res[2] = x₀[2] - model.firm.a₀
-    res[3] = τ₀ - committedtax(x₀, model)
+    res[1] = x₀[1] - model.firm.a₀
+    res[2] = x₀[4]
 
     return res
 end
 
-function terminalcondition(x̄::TX, model::AbstractModelParameters) where {T, TX <: AbstractVector{T}}
-    terminalcondition!(Vector{Float64}(undef, 3), x̄, model)
+function terminalcondition(x̄::TX, model::LinearLabourModelParameters) where {T, TX <: AbstractVector{T}}
+    terminalcondition!(Vector{Float64}(undef, 2), x̄, model)
 end
-function terminalcondition!(res, x̄, model::AbstractModelParameters)
-    @unpack firm, household = model
-    ∂ₘv, ∂ₐv, ∂ᵨv = ∇v̄(x̄, model)
-    _, a, q, λₘ, λₐ, λᵨ = x̄ # State, co-state, cumulative costs (z, λ, u)̄
+function terminalcondition!(res, x̄, model::LinearLabourModelParameters)
+    a, q, λₐ, λᵨ = x̄
+    _, marginalvalue, marginalvaluederivative, valuegradient = committedtail(a, model)
 
-    wage = ω(q, firm)
-    labour = n(wage, household)
-    output′ = firm.η * firm.A * n′(wage, household) * ω′(q, firm)
-    
-    res[1] = e(labour, a, firm) # No emissions
-    res[2] = ∂ₘv - λₘ
-    res[3] = (λᵨ - ∂ᵨv) + output′ * (λₐ - ∂ₐv)
+    res[1] = q - marginalvalue
+    res[2] = λₐ - valuegradient + λᵨ * marginalvaluederivative
 
     return res
 end
@@ -169,48 +162,20 @@ end
 "Drift of state co-state system with welfare as last variable"
 function driftwelfarecommitted!(dz, z, model, t)
     # State co-state drift
-    dx = @view dz[1:6]
-    x = @view z[1:6]
+    dx = @view dz[1:4]
+    x = @view z[1:4]
 
     driftcommitted!(dx, x, model, t)
 
     # Welfare costs drift
     @unpack household, firm, climate = model
-    da, dq = @view dx[2:3]
-    m, a, q = @view x[1:3]
-    τᶜ = q - dq / household.r + firm.κ * da
+    a = x[1]
+    ȧ = dx[1]
+    τᶜ = committedtax(x, model)
 
-    dw = exp(-household.r * t) * w(τᶜ, m, a, da, household, firm, climate)
-
-    dz[7] = dw
+    dw = exp(-household.r * t) * w(τᶜ, a, ȧ, household, firm, climate)
+    dz[5] = dw
 
     return dz
 
-end
-
-const defbvpalg = BVP.MIRK4()
-const defodealg = ODE.AutoTsit5(ODE.Rosenbrock23())
-
-function objectivewelfare(T, parameters)
-    bvproblem, welfareproblem, odeproblem, model, normalisedstep, bvpalg, odealg = parameters
-    return objectivewelfare(T, bvproblem, welfareproblem, odeproblem, model; normalisedstep, bvpalg, odealg)
-end
-function objectivewelfare(T::TX, bvproblem::BVP.BVProblem, welfareproblem::ODE.ODEProblem, odeproblem::ODE.ODEProblem, model::AbstractModelParameters; normalisedstep = 0.1, bvpalg = defbvpalg, odealg = defodealg) where TX
-    odesolguess = ODE.solve(odeproblem, odealg; tspan = T)
-    bvpsolution = BVP.solve(bvproblem, bvpalg; u0 = odesolguess, dt = normalisedstep * T, tspan = (0., T))
-
-    if !SciMLBase.successful_retcode(bvpsolution)
-        @warn "Unsuccessful BV solution with T = $T. Retcode = $(bvpsolution.retcode)"
-    end
-
-    x₀ = bvpsolution.u[1]
-    z₀ = SA.MVector{7, TX}(x₀..., 0.)
-    welfaresolution = ODE.solve(welfareproblem, odealg; u0 = z₀, save_end = true, save_everystep = false, save_start = false, tspan = T)
-
-    z̄ = only(welfaresolution.u)
-    m̄, ā, q̄ = @view z̄[1:3]
-
-    ū = w(q̄, m̄, ā, 0, model.household, model.firm, model.climate) / model.household.r
-    
-    return z̄[7] + exp(-model.household.r * T) * ū
 end
