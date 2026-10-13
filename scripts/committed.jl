@@ -68,20 +68,35 @@ if isfile(filename)
 end
 
 ## Solver
-x₀ = initialguess(SA.MVector, model)
-odefn = ODE.ODEFunction{true}(driftcommitted!)
-odeproblem = ODE.ODEProblem(ODE.ODEFunction{true}(driftcommitted!), x₀, (0., 1.), model)
-lb, ub = bvpbounds(model)
-bcresid_prototype = (initialcondition(x₀, model), terminalcondition(x₀, model))
-
-bvpfunction = SciMLBase.BVPFunction(driftcommitted!, (initialcondition!, terminalcondition!); bcresid_prototype, twopoint = Val(true))
 horizons = (5., 10., 20., 50., 100.)
-solutionguess = ODE.solve(odeproblem, ODE.Rosenbrock23(); tspan = (0., horizons[1]))
+solutionguess = (p, t) -> initialguess(SA.MVector, t, first(horizons), p)
+x₀ = solutionguess(model, zero(first(horizons)))
+x̄ = solutionguess(model, first(horizons))
+lb, ub = bvpbounds(model)
+bcresid_prototype = (initialcondition(x₀, model), terminalcondition(x̄, model))
+
+bvpfunction = SciMLBase.BVPFunction(driftcommittedinvestment!, (initialcondition!, terminalcondition!); bcresid_prototype, twopoint = Val(true))
+bvpsol = nothing
 
 for T in horizons
+    if !isnothing(bvpsol)
+        previoussolution = bvpsol
+        previoushorizon = last(previoussolution.t)
+        solutionguess = (_, t) -> previoussolution(min(t, previoushorizon))
+    end
+
     bvproblem = BVP.TwoPointBVProblem(bvpfunction, solutionguess, (0., T), model; lb, ub)
     candidate = BVP.solve(bvproblem, BVP.MIRK4(); dt = T * 1e-2)
-    SciMLBase.successful_retcode(candidate) || error("Committed BVP failed at T = $T with return code $(candidate.retcode).")
+    if !SciMLBase.successful_retcode(candidate)
+        if !isempty(candidate.u)
+            candidatepath = candidate.u
+            candidateinvestmentgap = minimum(x -> x[2] - household.r * c(x[1], firm), candidatepath)
+            candidatetaxdenominator = minimum(abs ∘ Base.Fix2(committedtaxdenominator, model), candidatepath)
+            candidatetaxgap = maximum(Base.Fix2(committedtaxgap, model), candidatepath)
+            @printf "Failed candidate diagnostics: investment gap %.3e, absolute tax denominator %.3e, tax Hamiltonian gap %.3e\n" candidateinvestmentgap candidatetaxdenominator candidatetaxgap
+        end
+        error("Committed BVP failed at T = $T with return code $(candidate.retcode).")
+    end
 
     if !isnothing(bvpsol)
         commondomain = range(0., bvpsol.t[end], length = 101)
@@ -94,19 +109,27 @@ end
 
 optimalpath = bvpsol
 T = last(horizons)
-taxpath = map(Base.Fix2(committedtax, model), optimalpath.u)
+statepath = optimalpath.u
+taxpath = map(Base.Fix2(committedtax, model), statepath)
 ts = optimalpath.t
 
-initialresidual = initialcondition(first(optimalpath.u), model)
-terminalresidual = terminalcondition(last(optimalpath.u), model)
+initialresidual = initialcondition(first(statepath), model)
+terminalresidual = terminalcondition(last(statepath), model)
 boundaryerror = max(LA.norm(initialresidual, Inf), LA.norm(terminalresidual, Inf))
+investmentgap = map(x -> x[2] - household.r * c(x[1], firm), statepath)
+taxdenominatorpath = map(Base.Fix2(committedtaxdenominator, model), statepath)
+taxhamiltoniangap = maximum(map(Base.Fix2(committedtaxgap, model), statepath))
+
 @printf "Maximum boundary residual: %.3e\n" boundaryerror
+@printf "Minimum investment gap: %.3e\n" minimum(investmentgap)
+@printf "Minimum absolute tax denominator: %.3e\n" minimum(abs, taxdenominatorpath)
+@printf "Maximum tax Hamiltonian gap: %.3e\n" taxhamiltoniangap
 
 ## Illustrate solution
 if isinteractive()
     Plots.default(linewidth = 5)
-    abatementpath = getindex.(optimalpath.u, 1)
-    marginalvaluepath = getindex.(optimalpath.u, 2)
+    abatementpath = getindex.(statepath, 1)
+    marginalvaluepath = getindex.(statepath, 2)
 
     taxfig = Plots.plot(ts, taxpath ./ taxfactor; c = :black, xlabel = "Year", ylabel = L"Policy [USD / tCO$_2$]", xlims = (0, T), margins = 6Plots.mm, label = L"\tau^c")
 

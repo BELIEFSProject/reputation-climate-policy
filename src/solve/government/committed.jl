@@ -44,6 +44,32 @@ function committedtax(x::TX, model::LinearLabourModelParameters) where {T, TX <:
     return clamp(num / den, 0, 1 / firm.η)
 end
 
+function committedtaxdenominator(x, model::LinearLabourModelParameters)
+    @unpack household, firm, climate = model
+    a, _, _, λᵨ = x
+    ϵ = emissivity(a, firm)
+
+    return ϵ + 2household.r * λᵨ + 2climate.γ * firm.A^2 * ϵ^2 / household.ν
+end
+
+function committedhamiltonian(τ, x, model::LinearLabourModelParameters)
+    @unpack household, firm = model
+    a, q, λₐ, λᵨ = x
+    ȧ = (q / household.r - c(a, firm)) / firm.ξ
+    labour = n(τ, a, household, firm)
+
+    return w(τ, a, ȧ, household, firm, model.climate) + λₐ * ȧ + household.r * λᵨ * (q - firm.A * labour * τ + firm.κ * ȧ)
+end
+
+function committedtaxgap(x, model::LinearLabourModelParameters)
+    τ = committedtax(x, model)
+    τupperbound = inv(model.firm.η)
+    chosenvalue = committedhamiltonian(τ, x, model)
+    minimumvalue = min(chosenvalue, committedhamiltonian(zero(τ), x, model), committedhamiltonian(τupperbound, x, model))
+
+    return max(chosenvalue - minimumvalue, zero(chosenvalue))
+end
+
 function committedtail(a, model::LinearLabourModelParameters)
     @unpack household, firm, climate = model
 
@@ -80,17 +106,24 @@ function committedtail(a, model::LinearLabourModelParameters)
 end
 
 ## State-Costate system
-initialguess(model) = initialguess(SA.SVector, model)
-function initialguess(TV, model::LinearLabourModelParameters)
-    @unpack firm = model
+initialguess(t, T, model) = initialguess(SA.SVector, t, T, model)
+function initialguess(TV, t, T, model::LinearLabourModelParameters)
+    @unpack household, firm = model
 
-    _, marginalvalue, _, valuegradient = committedtail(firm.a₀, model)
-    λᵨ₀ = zero(valuegradient)
+    # Approach the stopping boundary from the investment region with ȧ(T) = 0.
+    s = clamp(t / T, zero(T), one(T))
+    adjustmentspeed = √(household.r * firm.κ / firm.ξ)
+    terminalabatement = firm.η - (firm.η - firm.a₀) * exp(-adjustmentspeed * T)
+    a = firm.a₀ + (terminalabatement - firm.a₀) * s * (2 - s)
+    ȧ = 2(terminalabatement - firm.a₀) * (1 - s) / T
+    q = household.r * (c(a, firm) + firm.ξ * ȧ)
+    _, _, _, valuegradient = committedtail(terminalabatement, model)
+    λᵨ = zero(valuegradient)
 
-    return TV(firm.a₀, marginalvalue, valuegradient, λᵨ₀)
+    return TV(a, q, valuegradient, λᵨ)
 end
 
-function driftcommitted!(dx, x, model::AbstractModelParameters, _)
+function driftcommittedinvestment!(dx, x, model::AbstractModelParameters, _)
     @unpack household, firm, climate = model
     a, q, λₐ, λᵨ = x
 
@@ -98,23 +131,18 @@ function driftcommitted!(dx, x, model::AbstractModelParameters, _)
     labour = n(τᶜ, a, household, firm)
     labour′ = ∂ₐn(τᶜ, a, household, firm)
 
-    isinvesting = q > household.r * c(a, firm) && a < firm.η
-
-    da = isinvesting ? α(q, a, household, firm) : zero(a)
+    # The truncated problem covers the smooth investment arc before the stopping time.
+    da = (q / household.r - c(a, firm)) / firm.ξ
     dq = household.r * (q - firm.A * labour * τᶜ + firm.κ * da)
 
-    λₐwedge = isinvesting ?
-                (firm.κ / firm.ξ) * λₐ + (firm.κ^2 * a / firm.ξ) + household.r * λᵨ * firm.κ^2 / firm.ξ :
-                zero(a)
+    λₐwedge = (firm.κ / firm.ξ) * λₐ + (firm.κ^2 * a / firm.ξ) + household.r * λᵨ * firm.κ^2 / firm.ξ
 
     dλₐ = household.r * λₐ + climate.γ * (firm.A * labour)^2
             - firm.A * (2climate.γ * e(labour, a, firm) - emissivity(a, firm) * τᶜ) * labour′
             + household.r * λᵨ * (firm.A * τᶜ * labour′)
             + λₐwedge
 
-    dλᵨ = isinvesting ?
-            -firm.κ / firm.ξ * λᵨ - λₐ / (household.r * firm.ξ) - q / (household.r^2 * firm.ξ) :
-            zero(a)
+    dλᵨ = -firm.κ / firm.ξ * λᵨ - λₐ / (household.r * firm.ξ) - q / (household.r^2 * firm.ξ)
 
     dx[1] = da
     dx[2] = dq
@@ -124,10 +152,9 @@ function driftcommitted!(dx, x, model::AbstractModelParameters, _)
     return dx
 end
 
-
 ## Outer Optimization
 bvpbounds(model) = bvpbounds(SA.SVector, model)
-function bvpbounds(TV, model::AbstractModelParameters; λmax = Inf)
+function bvpbounds(TV, model::LinearLabourModelParameters; λmax = Inf)
     @unpack firm = model
 
     lb = TV(firm.a₀, zero(firm.a₀), -λmax, -λmax)
@@ -165,7 +192,7 @@ function driftwelfarecommitted!(dz, z, model, t)
     dx = @view dz[1:4]
     x = @view z[1:4]
 
-    driftcommitted!(dx, x, model, t)
+    driftcommittedinvestment!(dx, x, model, t)
 
     # Welfare costs drift
     @unpack household, firm, climate = model
