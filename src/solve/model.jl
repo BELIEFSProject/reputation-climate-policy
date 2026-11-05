@@ -1,20 +1,29 @@
-abstract type AbstractModelParameters end
+abstract type AbstractModel end
 
-struct ModelParameters{H <: Household, F, C} <: AbstractModelParameters
+struct Model{H <: Household, F, C} <: AbstractModel
     household::H
     firm::F
     climate::C
 end
 
 "Model parameters specialised to linear labour supply, corresponding to `ϕ = 1`."
-struct LinearLabourModelParameters{H <: LinearHousehold, F, C} <: AbstractModelParameters
+struct LinearLabourModel{H <: LinearHousehold, F, C} <: AbstractModel
     household::H
     firm::F
     climate::C
 end
 
-function ModelParameters(household::H, firm::F, climate::C) where {H, F, C}
+function Model(household::H, firm::F, climate::C) where {H, F, C}
     isa(household, LinearHousehold) ? 
-        LinearLabourModelParameters{H, F, C}(household, firm, climate) :
-        ModelParameters{H, F, C}(household, firm, climate)
+        LinearLabourModel{H, F, C}(household, firm, climate) :
+        Model{H, F, C}(household, firm, climate)
 end
+
+struct AffineGridMap{T}
+    lower::T
+    upper::T
+end
+
+span(grid::AffineGridMap) = grid.upper - grid.lower
+(grid::AffineGridMap)(z) = iszero(z) ? grid.lower : isone(z) ? grid.upper : grid.lower + span(grid) * z
+normalise(x, grid::AffineGridMap) = (x - grid.lower) / span(grid)

@@ -5,7 +5,7 @@ Base.@kwdef struct Firm{T} <: AbstractFirm{T}
     a₀::T = a₀
     A::T = defaultA
     η::T = defaultηᴱ
-    κ::T = defaultdietzϕ * y₀ / realfirmdiscount
+    κ::T = defaultdietzϕ * y₀^3 / realfirmdiscount
     ξ::T = defaultξ
 end
 
@@ -42,8 +42,13 @@ function c(a, firm::Firm)
     firm.κ * a
 end
 
+# The simplified model fixes the investment price at its initial-state value.
+c(firm::Firm) = c(firm.a₀, firm)
+
 c′(firm::Firm) = firm.κ
 c′(_, firm::Firm) = c′(firm)
+
+k(ȧ, firm::Firm) = c(firm) * ȧ + firm.ξ * ȧ^2 / 2
 
 function k(a, ȧ, firm::Firm)
     c(a, firm) * ȧ + firm.ξ * ȧ^2 / 2
@@ -55,26 +60,33 @@ end
 ## Equilibrium
 "Equilibrium labour demand given tax `τ` and abatement `a`."
 function n(τ, a, household::AbstractHousehold, firm::Firm)
-    n(ω(τ, a, firm), household)
+    wage = ω(τ, a, firm)
+    n(max(wage, zero(wage)), household)
 end
 
 function ∂ₜn(τ, a, household::Household, firm::Firm)
+    ω(τ, a, firm) ≤ 0 && return zero(τ + a)
     n′(ω(τ, a, firm), household) * ∂ₜω(a, firm)
 end
 function ∂ₜn(a, household::LinearHousehold, firm::Firm)
     n′(household) * ∂ₜω(a, firm)
 end
+function ∂ₜn(τ, a, household::LinearHousehold, firm::Firm)
+    ω(τ, a, firm) ≤ 0 ? zero(τ + a) : ∂ₜn(a, household, firm)
+end
 
 function ∂ₐn(τ, a, household::Household, firm::Firm)
+    ω(τ, a, firm) ≤ 0 && return zero(τ + a)
     n′(ω(τ, a, firm), household) * ∂ₐω(τ, a, firm)
 end
 
 function ∂ₐn(τ, a, household::LinearHousehold, firm::Firm)
+    ω(τ, a, firm) ≤ 0 && return zero(τ + a)
     n′(household) * ∂ₐω(τ, a, firm)
 end
 
-function α(q, a, household::AbstractHousehold, firm::Firm)
-    da = ((q / household.r) - c(a, firm)) / firm.ξ
-
-    return max(da, 0)
+function α(q, a, firm::Firm)
+    a ≥ firm.η ? zero(q + a) : max(q - c(a, firm), 0) / firm.ξ
 end
+
+α(q, firm::Firm) = max(q - c(firm), zero(q)) / firm.ξ

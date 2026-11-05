@@ -7,7 +7,7 @@ const ẽ₀ = 41.9 # [GtCO2e / year] gross emissions before abatement in 2026
 const e₀ = 36.0
 const y₀ = 197.231 # [trillion USD / year]
 
-const realhouseholddiscount = 1e-2
+const realhouseholddiscount = 1.5 / 100
 const realfirmdiscount = realhouseholddiscount
 
 # The zero-tax allocation is normalised to n(0) = 1, y(0) = y₀, and gross emissions ẽ₀.
@@ -19,14 +19,22 @@ const a₀ = (ẽ₀ - e₀) / defaultA
 
 const defaultscc = 66 * taxfactor # [trillion USD / GtCO2e]
 const dicescc = 3 * 66 / 1000
-const defaultdietzϕ = 3e-5 # Dietz-Venmans MAC slope ϕ
+const defaultγ = 1.0997e-3
+
+# Illustrative private utility: 80% implementation at the static Pigouvian tax at a₀, not at τ₀.
+const defaultbᴾ = 0.01
+const defaultimplementation = 0.8
+const defaultreferencetax = (2defaultγ * defaultA^2 / defaultν) / (1 + 2defaultγ * defaultA^2 * (defaultηᴱ - a₀) / defaultν)
+const defaultreferenceemissions = e₀ * (1 - (defaultηᴱ - a₀) * defaultimplementation * defaultreferencetax)
+const defaultκₚ = defaultbᴾ * defaultreferenceemissions * defaultreferencetax / defaultimplementation # [trillion USD-equivalent / year]
+
+const defaultdietzϕ = 3e-5 # Dietz-Venmans MAC slope in abatement flow y₀a
 const dietzφ = defaultdietzϕ
-const abatementdepreciation = 2e-2
-const defaultadjustmenthorizon = 30. # [years]
-# [tUSD year³ / GtCO2e²]
-const defaultξ = defaultdietzϕ * y₀ * defaultadjustmenthorizon^2 / (
+const abatementdepreciation = 0.08
+const defaultadjustmenthorizon = 10. # [years]
+const defaultξ = defaultdietzϕ * y₀^3 * defaultadjustmenthorizon^2 / (
     1 + realfirmdiscount * defaultadjustmenthorizon
 )
-const τ₀ = 50 * taxfactor
+const τ₀ = 5 * taxfactor
 
 const σ̂ = 0.38

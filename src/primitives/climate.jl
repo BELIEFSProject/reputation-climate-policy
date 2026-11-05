@@ -1,5 +1,5 @@
 Base.@kwdef struct Climate{T <: Real}
-    γ::T = 1.0997e-3
+    γ::T = defaultγ
 end
 
 function d(e, climate::Climate)

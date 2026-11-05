@@ -36,7 +36,7 @@ function parameterargumentsettings()
             help = "Scale of labour disutility."
         "--inverse-frisch", "--varphi-L", "--φᴸ"
             arg_type = Float64
-            dest_name = "φᴸ"
+            dest_name = "ϕ"
             default = nothing
             help = "Inverse Frisch elasticity of labour supply."
         "--productivity", "--A"
@@ -46,7 +46,7 @@ function parameterargumentsettings()
             help = "Total factor productivity."
         "--emissions-intensity", "--eta-E", "--ηᴱ"
             arg_type = Float64
-            dest_name = "ηᴱ"
+            dest_name = "η"
             default = nothing
             help = "Emissions intensity of output."
         "--discount", "--r"
@@ -54,11 +54,16 @@ function parameterargumentsettings()
             dest_name = "r"
             default = nothing
             help = "Discount rate."
-        "--delta", "--δ"
+        "--implementation-cost", "--kappa-p", "--κₚ"
             arg_type = Float64
-            dest_name = "δ"
+            dest_name = "κₚ"
             default = nothing
-            help = "Political cost of taxation coefficient."
+            help = "Private cost at full implementation is κₚ / 2, in output per year."
+        "--performance-weight", "--b"
+            arg_type = Float64
+            dest_name = "b"
+            default = nothing
+            help = "Weight on the observed levy performance reward."
         "--epsilon", "--eps", "--ϵ", "--ε"
             arg_type = Float64
             dest_name = "ϵ"
@@ -110,13 +115,14 @@ end
 function initmodels(args = ARGS)
     parsed = parseparameterarguments(args)
     
-    firmkwargs = parameterkwargs(parsed, (:e₀, :a₀, :A, :ηᴱ, :κ, :ξ))
+    firmkwargs = parameterkwargs(parsed, (:e₀, :a₀, :A, :η, :κ, :ξ))
     firm = Firm(; firmkwargs...)
-    householdkwargs = parameterkwargs(parsed, (:ν, :φᴸ, :r))
+    householdkwargs = parameterkwargs(parsed, (:ν, :ϕ, :r))
     household = Household(; householdkwargs...)
+    government = Government(; parameterkwargs(parsed, (:κₚ, :b))...)
 
     signal = Signal(; parameterkwargs(parsed, (:ϵ, :σ))...)
     climate = Climate(; parameterkwargs(parsed, (:γ, ))...)
 
-    return household, firm, signal, climate
+    return household, firm, government, signal, climate
 end

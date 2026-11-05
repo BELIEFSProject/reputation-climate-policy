@@ -1,3 +1,4 @@
+# Legacy (φ,m,a) model. The current GE implementation solver is noncommittedmarkov.jl.
 ## State space
 struct NonCommittedGrid{Tᵠ, Tₘ, Tₐ}
     φgrid::Tᵠ

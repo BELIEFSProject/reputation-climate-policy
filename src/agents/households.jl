@@ -26,7 +26,7 @@ function n(ω, household::Household)
     (ω / household.ν)^inv(household.ϕ)
 end
 function n′(ω, household::Household)
-    ((ω / household.ν)^(1 / household.ϕ - 1)) / household.ϕ
+    ((ω / household.ν)^(1 / household.ϕ - 1)) / (household.ϕ * household.ν)
 end
 
 # Sepcialise methods for φ = 1
