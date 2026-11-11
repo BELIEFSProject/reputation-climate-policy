@@ -1,5 +1,7 @@
 import SHA
 
+const solutionhashlength = 12
+
 function parameterstring(x)
     # `string` uses Julia's shortest round-trippable representation for floats, so distinct parameter values are not collapsed by display rounding.
     replace(string(x), "+" => "")
@@ -45,17 +47,18 @@ end
 function solutionfilename(household::AbstractHousehold, firm::Firm, climate::Climate)
     label = solutionlabel(household, firm, climate)
     digest = label |> SHA.sha256 |> bytes2hex
-    return "solution-$digest.jld2"
+    return "solution-$(first(digest, solutionhashlength)).jld2"
 end
 
 function committedsolutionfilename(model; initialtax = nothing, intervals = 100)
     label = join(("committed-full-interval-bvp-v2", solutionlabel(model.household, model.firm, model.climate), parameterstring(c(model.firm)), parameterstring(initialtax), string(intervals)), "_")
-    return "committed-simplified-$(bytes2hex(SHA.sha256(label))).jld2"
+    return "committed-simplified-$(first(bytes2hex(SHA.sha256(label)), solutionhashlength)).jld2"
 end
 
 function noncommittedsolutionkey(solution)
     parameters = solution.parameters
     model, path = parameters.model, parameters.τᶜ
-    label = join(("simplified-markov-joint-jump-v2", solutionlabel(model.household, model.firm, parameters.signal, model.climate), parameterstring(c(model.firm)), parameterstring(parameters.grid.h), parameterstring(parameters.grid.φ.lower), parameterstring(parameters.grid.φ.upper), parameterstring(parameters.grid.A.lower), parameterstring(parameters.grid.A.upper), parameterstring(parameters.Δtmax), parameterstring(parameters.tolerance), parameterstring(parameters.policytolerance), parameterstring(parameters.relaxation), string(parameters.maxiters), join(parameterstring.(solution.t), ","), join(parameterstring.(path.ts), ","), join(parameterstring.(path.taxpath), ","), parameterstring(path.tailtax)), "_")
+    settings = [string(field, "=", parameterstring(getfield(parameters, field))) for field in fieldnames(typeof(parameters)) if getfield(parameters, field) isa Real]
+    label = join(("simplified-markov-v4", string(nameof(typeof(parameters))), solutionlabel(model.household, model.firm, parameters.signal, model.climate), parameterstring(c(model.firm)), parameterstring(parameters.grid.h), parameterstring(parameters.grid.φ.lower), parameterstring(parameters.grid.φ.upper), parameterstring(parameters.grid.A.lower), parameterstring(parameters.grid.A.upper), join(settings, ","), join(parameterstring.(solution.t), ","), join(parameterstring.(path.ts), ","), join(parameterstring.(path.taxpath), ","), parameterstring(path.tailtax)), "_")
     return "noncommitted/$(bytes2hex(SHA.sha256(label)))"
 end

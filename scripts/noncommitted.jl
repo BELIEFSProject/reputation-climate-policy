@@ -5,15 +5,31 @@ import Printf
 import JLD2
 import Roots
 
+import DifferentiationInterface as DI
+import ForwardDiff as FD
+import SparseArrays as SP
+import SparseMatrixColorings as SMC
+
+import LinearAlgebra as LA
+import BandedMatrices as BM
+import ADTypes
+import LinearSolve as LS
+import NonlinearSolve as NLS
+import SciMLBase
+
 includet("../src/primitives/constants.jl")
 includet("../src/primitives/signal.jl")
 includet("../src/primitives/climate.jl")
+
 includet("../src/agents/households.jl")
 includet("../src/agents/firm.jl")
 includet("../src/agents/government.jl")
+
 includet("../src/dynamics/government.jl")
+
 includet("../src/solve/model.jl")
 includet("../src/solve/government/noncommittedmarkov.jl")
+includet("../src/solve/government/noncommitteddae.jl")
 includet("../src/utils/arguments.jl")
 includet("../src/utils/saving.jl")
 
@@ -28,21 +44,19 @@ committedfile = joinpath(@__DIR__, "..", "data", "solutions", committedsolutionf
 if !isfile(committedfile)
     error("Run scripts/committed.jl with the same model and numerical settings first: $committedfile")
 end
-announcedtaxpath = JLD2.jldopen(committedfile, "r") do file
+
+τᶜ = JLD2.jldopen(committedfile, "r") do file
     file["committedtaxpath"]
 end
-noncommittedhorizon = last(announcedtaxpath.ts) # The stationary tail is solved at this date.
-
-Printf.@printf("Constant installation price c = %.6g; initial κ₀ = %.6g, κ₁ = %.6g, κ₂ = %.6g\n", c(firm), κ₀(firm.a₀, household, firm, climate), κ₁(firm.a₀, household, firm, climate), κ₂(firm.a₀, household, firm, climate))
-Printf.@printf("Announced initial tax: %.3f USD/tCO₂\n", first(announcedtaxpath.taxpath) / taxfactor)
 
 ## Solve
-# h is shared by the two normalised state directions; time steps are calendar years.
-noncommittedgridstep = 1 / 40
-noncommittedtimestep = 1.
-noncommittedholdingtime = 1.
+# h is shared by both normalised states; announcement knots further split the implicit time steps.
+h = 1 / 80
+timestep = 0.1
+savestep = 1.0 # Calendar years between saved values; independent of the internal time step.
+horizon = last(τᶜ.ts) # The stationary tail is solved at this date.
 
-noncommittedsolution = solvenoncommitted(announcedtaxpath, model, government, signal; h = noncommittedgridstep, timestep = noncommittedtimestep, maxholdingtime = noncommittedholdingtime, horizon = noncommittedhorizon, verbose = 1)
+noncommittedsolution = solvenoncommitteddae(τᶜ, model, government, signal; h, timestep, savestep, horizon, verbose = 1);
 
 ## Diagnostics
 noncommittedinitialvalues = first(noncommittedsolution.u)
@@ -59,14 +73,14 @@ Printf.@printf("Maximum hidden-deviation improvement: %.3e output/year\n", nonco
 
 ## Save
 noncommittedkey = noncommittedsolutionkey(noncommittedsolution)
-noncommittedfile = joinpath(@__DIR__, "..", "data", "solutions", "noncommitted-simplified-$(last(split(noncommittedkey, '/'))).jld2")
+noncommittedfile = joinpath(@__DIR__, "..", "data", "solutions", "noncommitted-simplified-$(first(last(split(noncommittedkey, '/')), solutionhashlength)).jld2")
 if isfile(noncommittedfile)
     error("Non-committed result already exists at $noncommittedfile; preserving the saved solution.")
 end
 mkpath(dirname(noncommittedfile))
 JLD2.jldopen(noncommittedfile, "w") do file
     file["model"] = model
-    file["committedtaxpath"] = announcedtaxpath
+    file["committedtaxpath"] = τᶜ
     file["$noncommittedkey/solution"] = noncommittedsolution
     file["$noncommittedkey/government"] = government
     file["$noncommittedkey/signal"] = signal

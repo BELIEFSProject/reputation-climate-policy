@@ -50,41 +50,11 @@ plotpath = get(ENV, "PLOTPATH", "figures")
 figurepath = joinpath(plotpath, "preliminaries")
 ispath(figurepath) || mkpath(figurepath)
 household, firm, government, signal, climate = initmodels()
-
-## Welfare costs
-Δm = 100firm.e₀ # 100 years without abatement
-mgrid = range(0.0, climate.m₀ + Δm, 501)
-percentageformatter = x -> Printf.@sprintf "%.2f%%" 100x
-
-begin
-    damagevalues = map(m -> d(m, climate), mgrid)
-    initialdamage = d(climate.m₀, climate)
-
-    damagefig = CairoMakie.Figure(size = singlepanelsize)
-    damageaxis = CairoMakie.Axis(
-        damagefig[1, 1];
-        xlabel = L"Cumulative emissions $m_t$ [GtCO2e]",
-        ylabel = "Output loss [% GDP / year]",
-        limits = (extrema(mgrid), (0, nothing)),
-        ytickformat = values -> [Printf.@sprintf "%.1f%%" 100x for x in values],
-        yticks = 0:0.005:0.05,
-    )
-
-    CairoMakie.lines!(damageaxis, mgrid, damagevalues; color = defaultpalette[:damages], linewidth = publicationdefault(:medianlinewidth), label = L"Damages $d(m)$")
-    CairoMakie.lines!(damageaxis, [climate.m₀, climate.m₀], [0, initialdamage]; color = defaultpalette[:guide], linestyle = :dot, linewidth = publicationdefault(:guidelinewidth))
-    CairoMakie.lines!(damageaxis, [0, climate.m₀], [initialdamage, initialdamage]; color = defaultpalette[:guide], linestyle = :dot, linewidth = publicationdefault(:guidelinewidth))
-    CairoMakie.scatter!(damageaxis, [climate.m₀], [initialdamage]; color = defaultpalette[:damages], strokewidth = 0)
-    CairoMakie.axislegend(damageaxis; position = :lt)
-    savepublicationfigure(joinpath(figurepath, "damages"), damagefig)
-
-    damagefig
-end
-
 ## MAC curve
 agrid = range(0, firm.e₀, 501)
 
 begin
-    macvalues = map(a -> c(a, firm) / government.y₀, agrid)
+    macvalues = map(a -> c(a, firm), agrid)
 
     macfig = CairoMakie.Figure(size = singlepanelsize)
     macaxis = CairoMakie.Axis(

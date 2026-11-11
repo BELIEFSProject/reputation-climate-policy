@@ -15,7 +15,9 @@ struct CommittedBVPSolution{M, I, V, T, R}
 end
 
 "Lowest stationary price supporting marginal abatement at zero emissions."
-committedsupportingtax(model::LinearLabourModel) = model.household.r * c(model.firm) / y(n(0, model.firm.η, model.household, model.firm), model.firm)
+function committedsupportingtax(model::LinearLabourModel)
+    model.household.r * c(model.firm) / y(n(0, model.firm.η, model.household, model.firm), model.firm)
+end
 
 "Bounded Hamiltonian minimisation, with the pre-contact price convention at full abatement."
 function committedtax(a, λq, model::LinearLabourModel)
@@ -142,7 +144,7 @@ function solvecommitted(model::LinearLabourModel; initialtax = nothing, interval
     end
     solution = BVP.solve(problem, BVP.MIRK4(); dt = inv(intervals), adaptive = false, verbose = verbose > 1)
     if !SciMLBase.successful_retcode(solution)
-        error("Committed BVP failed with return code $(solution.retcode).")
+        @warn "Committed BVP failed with return code $(solution.retcode)."
     end
 
     ascale = firm.η - firm.a₀

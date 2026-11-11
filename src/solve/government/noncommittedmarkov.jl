@@ -1,10 +1,3 @@
-import LinearAlgebra as LA
-import BandedMatrices as BM
-import ADTypes
-import LinearSolve as LS
-import NonlinearSolve as NLS
-import SciMLBase
-
 ## Normalised state space
 struct NonCommittedMarkovGrid{T}
     h::T

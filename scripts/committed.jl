@@ -13,12 +13,16 @@ import QuadGK as QGK
 includet("../src/primitives/constants.jl")
 includet("../src/primitives/signal.jl")
 includet("../src/primitives/climate.jl")
+
 includet("../src/agents/households.jl")
 includet("../src/agents/firm.jl")
 includet("../src/agents/government.jl")
+
 includet("../src/dynamics/government.jl")
+
 includet("../src/solve/model.jl")
 includet("../src/solve/government/committed.jl")
+
 includet("../src/utils/arguments.jl")
 includet("../src/utils/saving.jl")
 
@@ -30,34 +34,37 @@ model = Model(household, firm, climate)
 initialtax = nothing
 intervals = 500
 filename = committedsolutionfilename(model; initialtax, intervals)
-committedfile = joinpath(@__DIR__, "..", "data", "solutions", filename)
+filepath = joinpath(@__DIR__, "..", "data", "solutions", filename)
 
-if isfile(committedfile)
-    error("Committed benchmark already exists at $committedfile; preserving the saved solution.")
+if isfile(filepath)
+    error("Committed benchmark already exists at $filepath; preserving the saved solution.")
 end
 
-committedsolution = solvecommitted(model; initialtax, intervals)
-committedtaxpath = CommittedTaxPath(committedsolution)
+solution = solvecommitted(model; initialtax, intervals)
+taxpath = CommittedTaxPath(solution)
 
-## Diagnostics
-committedtaxtimes = committedtaxpath.ts
-committedtaxes = committedtaxpath.taxpath ./ taxfactor # Repeated times display the tax jump.
-committedabatementrange = extrema(committedsolution.a)
-committedinvestmentrange = extrema(committedsolution.investment)
-committedtaxrange = extrema(committedtaxes)
-committedemissionspath = [e(n(τ, a, household, firm), a, firm) for (τ, a) in zip(committedsolution.tax, committedsolution.a)]
-committedlevypath = committedsolution.tax .* committedemissionspath
+## Plot the tax 
+if isinteractive()
+    import Plots
 
-Printf.@printf("Abatement [%.6g, %.6g]; investment [%.6g, %.6g]; tax [%.3f, %.3f] USD/tCO₂\n", first(committedabatementrange), last(committedabatementrange), first(committedinvestmentrange), last(committedinvestmentrange), first(committedtaxrange), last(committedtaxrange))
-Printf.@printf("Full abatement at calendar time %.6g; welfare cost %.8g; boundary residual %.3e\n", committedsolution.stoppingtime, committedsolution.welfarecost, committedsolution.boundarygap)
-Printf.@printf("Initial valuation %.6g; initial tax %.3f USD/tCO₂; contact tax %.3f → %.3f USD/tCO₂; return code %s\n", first(committedsolution.q), first(committedsolution.tax) / taxfactor, committedtaxpath(committedsolution.stoppingtime; side = :left) / taxfactor, committedtaxpath(committedsolution.stoppingtime) / taxfactor, string(committedsolution.retcode))
+    normalisedtaxpath =  taxpath.taxpath ./ taxfactor
+
+    fig = Plots.plot(taxpath.ts, normalisedtaxpath; xlabel = "Year", ylabel = "Policy", c = :darkred, xlims = extrema(taxpath.ts), yguidefontcolor = :darkred, label = false, linewidth = 2.5)
+
+    afig = Plots.twinx(fig)
+    Plots.plot!(afig, taxpath.ts, [firm.a₀, solution.a...]; c = :darkgreen, ylims = (0, 1.05 * firm.η), xlims = extrema(taxpath.ts), ylabel = "Abatemnet", yguidefontcolor = :darkgreen, label = false, linewidth = 2.5)
+
+    Plots.hline!(afig, [firm.η]; c = :black, linestyle = :dash, label = "Zero emissions")
+
+    fig
+end
 
 ## Save
-mkpath(dirname(committedfile))
-JLD2.jldopen(committedfile, "w") do file
+mkpath(dirname(filepath))
+JLD2.jldopen(filepath, "w") do file
     file["model"] = model
-    file["committedtaxpath"] = committedtaxpath
-    file["committed/solution"] = committedsolution
-    file["committed/welfarecost"] = committedsolution.welfarecost
+    file["committedtaxpath"] = taxpath
+    file["committed/solution"] = solution
+    file["committed/welfarecost"] = solution.welfarecost
 end
-@info "Saved committed benchmark" committedfile
+@info "Saved committed benchmark" filepath

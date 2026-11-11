@@ -1,5 +1,4 @@
 const CtoCO₂ = 44 / 12
-const CtoCO2 = CtoCO₂
 const taxfactor = 1e9 * 1e-12 # USD / tCO2e to trillion USD / GtCO2e
 const scctotax = CtoCO₂ * taxfactor # USD / tC to trillion USD / GtC
 
@@ -19,7 +18,7 @@ const a₀ = (ẽ₀ - e₀) / defaultA
 
 const defaultscc = 66 * taxfactor # [trillion USD / GtCO2e]
 const dicescc = 3 * 66 / 1000
-const defaultγ = 1.0997e-3
+const defaultγ = 2.1994e-3 # 1.0997e-3
 
 # Illustrative private utility: 80% implementation at the static Pigouvian tax at a₀, not at τ₀.
 const defaultbᴾ = 0.01
@@ -31,10 +30,8 @@ const defaultκₚ = defaultbᴾ * defaultreferenceemissions * defaultreferencet
 const defaultdietzϕ = 3e-5 # Dietz-Venmans MAC slope in abatement flow y₀a
 const dietzφ = defaultdietzϕ
 const abatementdepreciation = 0.08
-const defaultadjustmenthorizon = 10. # [years]
-const defaultξ = defaultdietzϕ * y₀^3 * defaultadjustmenthorizon^2 / (
-    1 + realfirmdiscount * defaultadjustmenthorizon
-)
-const τ₀ = 5 * taxfactor
+const defaultadjustmenthorizon = 70. # [years]
+const defaultξ = defaultdietzϕ * y₀^3 * defaultadjustmenthorizon^2 / (1 + realfirmdiscount * defaultadjustmenthorizon)
+const τ₀ = 90 * taxfactor
 
 const σ̂ = 0.38
