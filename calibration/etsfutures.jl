@@ -13,6 +13,14 @@ import LaTeXStrings: @L_str
 includet("../scripts/plotting/publication.jl")
 includet("locallevel.jl")
 
+## Slide styling
+# Moloch retains Beamer's default sans serif; use its Latin Modern counterpart.
+slidefont = String(readchomp(`kpsewhich lmsans10-regular.otf`))
+slideboldfont = String(readchomp(`kpsewhich lmsans10-bold.otf`))
+isfile(slidefont) && isfile(slideboldfont) || error("Latin Modern Sans OpenType fonts could not be found in the TeX installation.")
+slidesize = (600, 280)
+slidetheme = merge(CairoMakie.Theme(fonts = CairoMakie.Attributes(regular = slidefont, bold = slideboldfont), fontsize = 18, Axis = CairoMakie.Attributes(titlesize = 16, xlabelsize = 18, ylabelsize = 18, xticklabelsize = 14, yticklabelsize = 14)), publicationtheme)
+
 ## Load data
 etsdatapath = joinpath(@__DIR__, "data", "futures-table.xlsx")
 # Closing prices are stored separately from volumes and bid/ask quotes.
@@ -35,16 +43,16 @@ dataplot = DataFrames.sort(data, 1)
 # Day offsets keep calendar labels explicit on the numerical plotting axis.
 plotdates = dataplot[!, 1]
 dayoffsets = Dates.value.(plotdates .- firstdate)
-tickdates = collect(firstdate:Dates.Month(3):lastedate)
+tickdates = collect(firstdate:Dates.Month(6):lastedate)
 tickpositions = Dates.value.(tickdates .- firstdate)
 ticklabels = Dates.format.(tickdates, "yyyy-mm")
 minortickdates = collect(firstdate:Dates.Month(1):lastedate)
 minortickpositions = Dates.value.(minortickdates .- firstdate)
 colours = CairoMakie.resample_cmap(:viridis, length(maturitynames))
 
-etsfigure = CairoMakie.with_theme(publicationtheme) do
-    figure = CairoMakie.Figure(size = 400 .* (10 / 6, 1), backgroundcolor = "#FAFAFA")
-    axis = CairoMakie.Axis(figure[1, 1]; title = L"ETS Futures Prices $y^T_t$ by Maturity $T$", xlabel = "Date", ylabel = "Price € / tCO2e", backgroundcolor = "#FAFAFA", xticks = (tickpositions, ticklabels), xticklabelrotation = pi / 2, xticklabelsize = 9)
+etsfigure = CairoMakie.with_theme(slidetheme) do
+    figure = CairoMakie.Figure(size = slidesize, backgroundcolor = "#FAFAFA")
+    axis = CairoMakie.Axis(figure[1, 1]; title = L"ETS Futures Prices $y^T_t$ by Maturity $T$", xlabel = "Date", ylabel = "Price € / tCO2e", backgroundcolor = "#FAFAFA", xticks = (tickpositions, ticklabels), xticklabelrotation = pi / 4)
 
     for (column, colour) in zip(maturitynames, colours)
         CairoMakie.lines!(axis, dayoffsets, dataplot[!, column]; color = colour, linewidth = publicationdefault(:samplepathlinewidth), label = column)
@@ -78,9 +86,9 @@ horizonbands = 8
 horizoncolormap = CairoMakie.cgrad(:viridis, horizonbands; categorical = true)
 horizoncolours = [horizoncolormap[(h - 1) / max(maxhorizon - 1, 1)] for h in 1:maxhorizon]
 
-horizonfigure = CairoMakie.with_theme(publicationtheme) do
-    figure = CairoMakie.Figure(size = 400 .* (10 / 6, 1), backgroundcolor = "#FAFAFA")
-    axis = CairoMakie.Axis(figure[1, 1]; title = L"ETS Futures Price $x^h_t$ by Horizon $h$", titlesize = 14, xlabel = "Trading Date", ylabel = "Price (€/tCO₂)", backgroundcolor = "#FAFAFA", xticks = (tickpositions, ticklabels), xticklabelrotation = pi / 2, xticklabelsize = 9, xminorticks = minortickpositions, xminorticksvisible = true)
+horizonfigure = CairoMakie.with_theme(slidetheme) do
+    figure = CairoMakie.Figure(size = slidesize, backgroundcolor = "#FAFAFA")
+    axis = CairoMakie.Axis(figure[1, 1]; title = L"ETS Futures Price $x^h_t$ by Horizon $h$", xlabel = "Trading Date", ylabel = "Price (€/tCO₂)", backgroundcolor = "#FAFAFA", xticks = (tickpositions, ticklabels), xticklabelrotation = pi / 4, xminorticks = minortickpositions, xminorticksvisible = true)
 
     for h in 1:maxhorizon
         coverage[h] == 0 && continue
@@ -88,7 +96,7 @@ horizonfigure = CairoMakie.with_theme(publicationtheme) do
         CairoMakie.scatter!(axis, dayoffsets[available], horizonmatrix[available, h]; color = horizoncolours[h], markersize = 4)
     end
 
-    CairoMakie.Colorbar(figure[1, 2]; colormap = horizoncolormap, limits = (1, maxhorizon), label = L"Time to maturity $h$ [days]", labelsize = 12, ticklabelsize = 10, ticks = CairoMakie.LinearTicks(5), width = 10, spinewidth = 0)
+    CairoMakie.Colorbar(figure[1, 2]; colormap = horizoncolormap, limits = (1, maxhorizon), label = L"Time to maturity $h$ [days]", labelsize = 16, ticklabelsize = 14, ticks = CairoMakie.LinearTicks(5), width = 10, spinewidth = 0)
     CairoMakie.xlims!(axis, 0, Dates.value(lastedate - firstdate))
     figure
 end
@@ -101,9 +109,9 @@ Printf.@printf "Common-shock standard deviation: %.4f EUR/tCO2 per sqrt(calendar
 Printf.@printf "Horizon observation-noise standard deviation: %.4f EUR/tCO2\n" sqrt(locallevelfit.observationvariance)
 Printf.@printf "Local-level diffuse log likelihood: %.4f\n" locallevelfit.loglikelihood
 
-locallevelfigure = CairoMakie.with_theme(publicationtheme) do
-    figure = CairoMakie.Figure(size = 400 .* (10 / 6, 1), backgroundcolor = "#FAFAFA")
-    noiseaxis = CairoMakie.Axis(figure[1, 1]; title = L"Horizon noise $\sigma \text{d}z_t$", titlesize = 14, xlabel = "Trading Date", ylabel = "Price (€/tCO₂)", backgroundcolor = "#FAFAFA", xticks = (tickpositions, ticklabels), xticklabelrotation = pi / 2, xticklabelsize = 9, xminorticks = minortickpositions, xminorticksvisible = true)
+locallevelfigure = CairoMakie.with_theme(slidetheme) do
+    figure = CairoMakie.Figure(size = slidesize, backgroundcolor = "#FAFAFA")
+    noiseaxis = CairoMakie.Axis(figure[1, 1]; title = L"Horizon noise $\sigma \text{d}z_t$", xlabel = "Trading Date", ylabel = "Price (€/tCO₂)", backgroundcolor = "#FAFAFA", xticks = (tickpositions, ticklabels), xticklabelrotation = pi / 4, xminorticks = minortickpositions, xminorticksvisible = true)
     levelcolour = horizoncolormap[0.5]
 
     CairoMakie.hlines!(noiseaxis, [0]; color = (levelcolour, 0.4), linewidth = publicationdefault(:samplepathlinewidth))
@@ -113,7 +121,7 @@ locallevelfigure = CairoMakie.with_theme(publicationtheme) do
         CairoMakie.scatter!(noiseaxis, dayoffsets[available], locallevelfit.noise[available, h]; color = horizoncolours[h], markersize = 4)
     end
 
-    CairoMakie.Colorbar(figure[1, 2]; colormap = horizoncolormap, limits = (1, maxhorizon), label = L"Time to maturity $h$ [days]", labelsize = 12, ticklabelsize = 10, ticks = CairoMakie.LinearTicks(5), width = 10, spinewidth = 0)
+    CairoMakie.Colorbar(figure[1, 2]; colormap = horizoncolormap, limits = (1, maxhorizon), label = L"Time to maturity $h$ [days]", labelsize = 16, ticklabelsize = 14, ticks = CairoMakie.LinearTicks(5), width = 10, spinewidth = 0)
     CairoMakie.xlims!(noiseaxis, 0, Dates.value(lastedate - firstdate))
     figure
 end
