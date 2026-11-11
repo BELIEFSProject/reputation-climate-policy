@@ -1,7 +1,6 @@
 using Test
 
 import UnPack: @unpack
-import Roots
 import BoundaryValueDiffEq as BVP
 import SciMLBase
 import ForwardDiff as FD

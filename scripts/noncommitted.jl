@@ -3,15 +3,12 @@ using Revise
 
 import Printf
 import JLD2
-import Roots
 
 import DifferentiationInterface as DI
 import ForwardDiff as FD
 import SparseArrays as SP
 import SparseMatrixColorings as SMC
 
-import LinearAlgebra as LA
-import BandedMatrices as BM
 import ADTypes
 import LinearSolve as LS
 import NonlinearSolve as NLS
@@ -38,7 +35,7 @@ household, firm, government, signal, climate = initmodels()
 model = Model(household, firm, climate)
 
 ## Announced policy
-committedinitialtax = nothing # Use τ₀ to anchor the committed announcement.
+committedinitialtax = nothing # Set an inherited tax to anchor the committed announcement.
 committedintervals = 500
 committedfile = joinpath(@__DIR__, "..", "data", "solutions", committedsolutionfilename(model; initialtax = committedinitialtax, intervals = committedintervals))
 if !isfile(committedfile)

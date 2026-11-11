@@ -4,7 +4,6 @@ using Revise
 
 import DotEnv
 import JLD2
-import Roots
 import Printf
 import Colors
 import CairoMakie

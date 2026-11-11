@@ -17,9 +17,6 @@ end
 function v(n, household::Household)
     household.ν * n^(1 + household.ϕ) / (1 + household.ϕ)
 end
-function v′(n, household::Household)
-    household.ν * n^household.ϕ
-end
 
 "Labour supply given wage `ω`"
 function n(ω, household::Household)
@@ -37,9 +34,6 @@ end
 
 function v(n, household::LinearHousehold)
     household.ν * n^2 / 2
-end
-function v′(n, household::LinearHousehold)
-    household.ν * n
 end
 
 function n(ω, household::LinearHousehold)

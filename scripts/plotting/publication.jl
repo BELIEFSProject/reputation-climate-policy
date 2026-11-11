@@ -1,17 +1,12 @@
 const publicationsettings = (;
     samplepathlinewidth = 1.0,
     medianlinewidth = 3.5,
-    committedlinewidth = 3.0,
     guidelinewidth = 2.0,
     samplepathopacity = 0.14,
     intervalopacity = 0.22,
     paneltitlefontsize = 20,
     annotationfontsize = 13,
-    panelwidth = 300,
-    panelheight = 320,
 )
-const startyear = 2025
-const denseyticks = CairoMakie.LinearTicks(8)
 
 const publicationtheme = CairoMakie.Theme(
     fontsize = 16,

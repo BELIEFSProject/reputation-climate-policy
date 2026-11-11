@@ -2,7 +2,7 @@ The plotting scripts for the current Markov solution are `reputation.jl`, `commi
 
 ## Stochastic dynamics of the current Markov solution
 
-Run `julia --project=. scripts/plotting/dynamic.jl` for Monte Carlo paths under the saved Markov equilibrium. `dynamics.jl` is a compatibility entry point that runs the same script. The script selects the current baseline calibration, with the same `REPUTATION_SOLUTION` override as the reputation script, and compares every otherwise matching saved noise equilibrium. It does not solve new equilibria or change their calibration.
+Run `julia --project=. scripts/plotting/dynamic.jl` for Monte Carlo paths under the saved Markov equilibrium. The script selects the current baseline calibration, with the same `REPUTATION_SOLUTION` override as the reputation script, and compares every otherwise matching saved noise equilibrium. It does not solve new equilibria or change their calibration.
 
 The configuration selects a fixed initial belief `φ₀ = 0.5`, `npaths = 500`, simulation step `Δt = 0.01` years and saved spacing `saveinterval = 0.25` years. Both experiments use the same Gaussian innovations across noise levels. The `uniform` experiment also uses the same initial draws across noise levels. All trajectories condition on a non-committed government by default; set `committed = true` to condition on commitment instead. Uniform sampling describes heterogeneity in initial public beliefs, rather than sampling government types.
 
@@ -16,10 +16,10 @@ The physical paths and initial draws are cached under `DATAPATH/simulations/dyna
 
 The script logs the initial and maximum cross-trajectory belief standard deviations and maximum physical belief volatility for each experiment and noise level. Here `σφ = (ϵ/σ)φ(1−φ)(τᶜ−τⁿᶜ)`: increasing observation noise `σ` does not directly add posterior volatility. Pooling gives zero learning, and near-pooling can produce bands too narrow to see on the full state-variable axes. Uniform initial beliefs still have dispersion even without subsequent learning.
 
-Both entry points produce the fixed-prior and uniform-prior figures across matching saved noise equilibria in one run:
+The script produces the fixed-prior and uniform-prior figures across matching saved noise equilibria in one run:
 
 ```powershell
-julia --project=. scripts/plotting/dynamics.jl
+julia --project=. scripts/plotting/dynamic.jl
 ```
 
 ## Reputation and the current Markov solution
@@ -35,7 +35,7 @@ Run `julia --project=. scripts/plotting/commitment.jl` for the commitment compar
 
 Solution filenames and corresponding figure-folder names use the first 12 hexadecimal hash characters. The full internal non-committed cache keys are retained. Existing solution files and figure folders have been moved to the short names.
 
-Each plot is exported separately as a 16:9 PDF and a 1920×1080 PNG under `PLOTPATH/<solution-name>/reputation/`, with a `#FAFAFA` figure, axis and legend background for Moloch slides. The current configuration uses a 90% initial reputation and unexpected public news near year 10 that multiplies the odds of commitment by 0.1. These choices, the forward projection step and the near-zero threshold are declared at the top of the script. The model calibration and equilibrium selection are taken from the saved solution.
+Each plot is exported separately as a 16:9 PDF and a 1920×1080 PNG under `PLOTPATH/<solution-name>/reputation/`, with a `#FAFAFA` figure, axis and legend background for Moloch slides. The current configuration uses a 50% initial reputation and unexpected public news near year 10 that multiplies the odds of commitment by 0.1. These choices, the forward projection step and the near-zero threshold are declared at the top of the script. The model calibration and equilibrium selection are taken from the saved solution.
 
 - `reputation-mechanism-{policy,investment-value,investment}`: actual and expected policy, investment value and investment as reputation varies, holding calendar time and abatement fixed. The abatement stock is the grid point nearest the baseline mean immediately before the news.
 - `reputation-transition-{belief,policy,abatement,emissions}`: expected reputation, implemented policy, abatement and cumulative emissions with and without the news. The two cases have the same distribution before the intervention. Repeated news dates draw the instantaneous posterior update explicitly.
@@ -79,4 +79,3 @@ foreach ($sigma in 0.19, 0.38, 0.76) {
 
 The solver preserves existing result files, so omit calibrations that are already saved. Refine the forward projection step to assess projection accuracy and use separately solved finer grids to assess equilibrium discretisation error.
 
-If `scripts/noncommitted.jl` additionally rescales `signal.σ`, comparisons use the actual noise stored in each solution, rather than the command-line value before rescaling.

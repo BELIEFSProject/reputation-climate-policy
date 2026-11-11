@@ -43,13 +43,6 @@ function solutionlabel(household::AbstractHousehold, firm::Firm, signal::Signal,
     join((solutionlabel(household, firm, climate), signallabel(signal)), "_")
 end
 
-"Short, stable filename determined by every committed-solution parameter."
-function solutionfilename(household::AbstractHousehold, firm::Firm, climate::Climate)
-    label = solutionlabel(household, firm, climate)
-    digest = label |> SHA.sha256 |> bytes2hex
-    return "solution-$(first(digest, solutionhashlength)).jld2"
-end
-
 function committedsolutionfilename(model; initialtax = nothing, intervals = 100)
     label = join(("committed-full-interval-bvp-v2", solutionlabel(model.household, model.firm, model.climate), parameterstring(c(model.firm)), parameterstring(initialtax), string(intervals)), "_")
     return "committed-simplified-$(first(bytes2hex(SHA.sha256(label)), solutionhashlength)).jld2"

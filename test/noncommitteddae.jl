@@ -5,8 +5,6 @@ import ForwardDiff as FD
 import SparseArrays as SP
 import DifferentiationInterface as DI
 import SparseMatrixColorings as SMC
-import LinearAlgebra as LA
-import BandedMatrices as BM
 import ADTypes
 import LinearSolve as LS
 import NonlinearSolve as NLS
@@ -30,6 +28,19 @@ testmodel = Model(testhousehold, testfirm, Climate(; γ = 0.02))
 testgovernment = Government(; κₚ = 0.5, b = 0.3)
 testsignal = Signal(; ϵ = 1.0, σ = 0.5)
 
+@testset "Explicit welfare coefficients and constant installation price" begin
+    @test c(testfirm) == testfirm.κ * testfirm.a₀
+    @test k(0.2, testfirm) ≈ c(testfirm) * 0.2 + testfirm.ξ * 0.2^2 / 2
+    @test α(0.5, testfirm) ≈ (0.5 - c(testfirm)) / testfirm.ξ
+    for a in (testfirm.a₀, 0.55, testfirm.η), τ in (0.0, 0.2, 0.8)
+        labour = n(τ, a, testhousehold, testfirm)
+        resourcecost = k(0.2, testfirm) + v(labour, testhousehold) - y(labour, testfirm) * (1 - d(e(labour, a, testfirm), testmodel.climate))
+        @test simplifiedcost(τ, a, 0.2, testhousehold, testfirm, testmodel.climate) ≈ resourcecost
+    end
+    @test κ₁(testfirm.η, testhousehold, testfirm, testmodel.climate) == 0
+    @test κ₂(testfirm.η, testhousehold, testfirm, testmodel.climate) == 0
+end
+
 @testset "Announcement jumps retain the correct one-sided mandate" begin
     path = CommittedTaxPath([0.6, 0.6, 0.3, 0.3, 0.1], [0.0, 0.4, 0.4, 1.0, 1.0], 0.1)
     parameters = NonCommittedDAEParameters(path, testmodel, testgovernment, testsignal; h = 0.5)
@@ -48,7 +59,7 @@ end
     parameters = NonCommittedDAEParameters(path, testmodel, testgovernment, testsignal; h = 0.5)
     finerparameters = NonCommittedDAEParameters(path, testmodel, testgovernment, testsignal; h = 0.5, timestep = 0.5)
     grid = parameters.grid
-    legacyparameters = NonCommittedMarkovParameters(testmodel, testgovernment, testsignal, path, grid, 1.0)
+    legacyparameters = NonCommittedMarkovParameters(testmodel, testgovernment, testsignal, path, grid, 1.0, 1e-8, 1e-7, 0.5, 1000)
     times = [0.0, 1.0]
     values = [NonCommittedMarkovValue(t, grid, zeros(size(grid)), zeros(size(grid)), zeros(size(grid)), zeros(size(grid))) for t in times]
     diagnostics = fill(NonCommittedMarkovDiagnostics(0, 0.0, 0.0, 0.0, 0.0), length(times))
@@ -342,4 +353,22 @@ end
             @test value.u[i, j] ≈ κ₀(a, testhousehold, testfirm, testmodel.climate) / testhousehold.r atol = 1e-8
         end
     end
+end
+
+@testset "Calendar jumps use one-sided policy interpolation" begin
+    grid = NonCommittedMarkovGrid(testmodel, 0.5)
+    path = CommittedTaxPath([0.6, 0.6, 0.1, 0.1], [0.0, 0.4, 0.4, 1.0], 0.1)
+    parameters = NonCommittedDAEParameters(path, testmodel, testgovernment, testsignal; h = 0.5, timestep = 0.25)
+    values = [NonCommittedMarkovValue(t, grid, fill(q, size(grid)), fill(q + 1, size(grid)), fill(q + 2, size(grid)), fill(τ, size(grid))) for (t, q, τ) in ((0.0, 1.0, 0.3), (0.4, 2.0, 0.05), (1.0, 3.0, 0.04))]
+    diagnostics = fill(NonCommittedMarkovDiagnostics(0, 0.0, 0.0, 0.0, 0.0), 3)
+    solution = NonCommittedMarkovSolution([0.0, 0.4, 1.0], values, parameters, diagnostics)
+    @test all(==(0.3), solution(0.3).τ)
+    @test all(==(0.05), solution(0.4).τ)
+    @test solution(0.3).q ≈ fill(1.75, size(grid))
+    @test solution(0.3).u ≈ fill(3.75, size(grid))
+    @test path(0.4; side = :left) == 0.6
+    @test path(0.4) == 0.1
+
+    @test_throws DomainError solution(-0.01)
+    @test_throws DomainError solution(1.01)
 end

@@ -24,11 +24,6 @@ function parameterargumentsettings()
             dest_name = "ξ"
             default = nothing
             help = "Investment-rate adjustment cost."
-        "--firm-discount", "--firm-r"
-            arg_type = Float64
-            dest_name = "firm_r"
-            default = nothing
-            help = "Firm discount rate."
         "--nu", "--ν"
             arg_type = Float64
             dest_name = "ν"
@@ -54,16 +49,6 @@ function parameterargumentsettings()
             dest_name = "r"
             default = nothing
             help = "Discount rate."
-        "--implementation-cost", "--kappa-p", "--κₚ"
-            arg_type = Float64
-            dest_name = "κₚ"
-            default = nothing
-            help = "Private cost at full implementation is κₚ / 2, in output per year."
-        "--performance-weight", "--b"
-            arg_type = Float64
-            dest_name = "b"
-            default = nothing
-            help = "Weight on the observed levy performance reward."
         "--epsilon", "--eps", "--ϵ", "--ε"
             arg_type = Float64
             dest_name = "ϵ"
@@ -79,16 +64,6 @@ function parameterargumentsettings()
             dest_name = "γ"
             default = nothing
             help = "Damage coefficient."
-        "--zeta", "--ζ"
-            arg_type = Float64
-            dest_name = "ζ"
-            default = nothing
-            help = "TCRE."
-        "--m0", "--m₀"
-            arg_type = Float64
-            dest_name = "m₀"
-            default = nothing
-            help = "Initial cumulative emissions."
     end
 
     return settings
@@ -119,7 +94,7 @@ function initmodels(args = ARGS)
     firm = Firm(; firmkwargs...)
     householdkwargs = parameterkwargs(parsed, (:ν, :ϕ, :r))
     household = Household(; householdkwargs...)
-    government = Government(; parameterkwargs(parsed, (:κₚ, :b))...)
+    government = Government()
 
     signal = Signal(; parameterkwargs(parsed, (:ϵ, :σ))...)
     climate = Climate(; parameterkwargs(parsed, (:γ, ))...)

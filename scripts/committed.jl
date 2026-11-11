@@ -5,7 +5,6 @@ import UnPack: @unpack
 
 import Printf
 import JLD2
-import Roots
 import BoundaryValueDiffEq as BVP
 import SciMLBase
 import QuadGK as QGK
@@ -43,7 +42,7 @@ end
 solution = solvecommitted(model; initialtax, intervals)
 taxpath = CommittedTaxPath(solution)
 
-## Plot the tax 
+## Plot the tax
 if isinteractive()
     import Plots
 
