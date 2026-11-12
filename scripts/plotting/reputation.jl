@@ -310,11 +310,21 @@ if 1 < i < size(grid, 1)
     ∂ᵩuᵍ = (value.uᵍ[i + 1, j] - value.uᵍ[i - 1, j]) / (2grid.h * span(grid.φ))
 end
 
-κ₁a = κ₁(a, household, firm, model.climate)
-κ₂a = κ₂(a, household, firm, model.climate)
 χvalues = signal.ϵ * Δτ ./ σvalues
 σᵩ = φ * (1 - φ) .* χvalues
-τ̂ = [iszero(κ₂a) ? 0 : clamp(-(κ₁a + φ * (1 - φ) * (signal.ϵ / σ)^2 * Δτ * ∂ᵩuᵍ) / κ₂a, 0, τᶜ) for σ in σvalues]
+τ̂ = map(σvalues) do σ
+    if a ≥ firm.η || iszero(τᶜ)
+        return zero(τᶜ)
+    end
+    reputationterm = φ * (1 - φ) * (signal.ϵ / σ)^2 * Δτ * ∂ᵩuᵍ
+    if household isa LinearHousehold
+        return clamp(-(κ₁(a, household, firm, model.climate) + reputationterm) / κ₂(a, household, firm, model.climate), 0, τᶜ)
+    end
+    output = y(n(0, a, household, firm), firm)
+    gap = firm.η - a
+    target = 2model.climate.γ * output - 2reputationterm / (gap^2 * output)
+    return target ≤ 0 ? zero(target) : clamp(2target / (sqrt((gap * target)^2 + 4) + gap * target), 0, τᶜ)
+end
 informationseries = (χvalues.^2 ./ 2, σᵩ, τ̂ ./ taxfactor)
 informationtitles = ("Statistical separation", "Belief volatility", "Hidden best response")
 informationlabels = (L"$\chi^2/2$ [per year]", L"$\sigma_\phi$ [per $\sqrt{\mathrm{year}}$]", "USD/tCO₂e")
@@ -333,7 +343,7 @@ end
 
 ## Equilibrium signal-noise comparisons, when matching solutions are available
 
-ȳ = firm.A^2 / household.ν
+ȳ = y(n(0, firm.η, household, firm), firm)
 initialmass = reputationinitialmass(grid, φ₀, firm.a₀)
 u₀ = LA.dot(initialmass, vec(first(baseline.solution.u).u))
 uvalues = [LA.dot(initialmass, vec(first(equilibrium.solution.u).u)) for equilibrium in matches]

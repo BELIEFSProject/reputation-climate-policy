@@ -38,7 +38,7 @@ function reputationtaxregimes(a, τ, mandate, parameters, tolerance)
     if a ≥ firm.η
         return false, false, false, false, true
     end
-    preferred = (2climate.γ * firm.A^2 / household.ν) / (1 + 2climate.γ * firm.A^2 * (firm.η - a) / household.ν)
+    preferred = statictax(a, household, firm, climate)
     return mandate ≤ preferred, abs(mandate - τ) ≤ tolerance, abs(τ - min(preferred, mandate)) > tolerance, tolerance < τ < mandate - tolerance, false
 end
 
@@ -47,7 +47,7 @@ function reputationtaxdiagnostics(equilibrium, value; tolerance = max(10equilibr
     parameters = equilibrium.solution.parameters
     household, firm, climate, grid = parameters.model.household, parameters.model.firm, parameters.model.climate, parameters.grid
     mandate = parameters.τᶜ(value.t)
-    preferred = [j == size(grid, 2) ? NaN : (2climate.γ * firm.A^2 / household.ν) / (1 + 2climate.γ * firm.A^2 * (firm.η - physicalstate(grid, 1, j)[2]) / household.ν) for j in 1:size(grid, 2)]
+    preferred = [j == size(grid, 2) ? NaN : statictax(physicalstate(grid, 1, j)[2], household, firm, climate) for j in 1:size(grid, 2)]
     policygap, preferencegap, reputationwedge = (similar(value.τ) for _ in 1:3)
     regimes = falses(length(value.τ), 5)
     for j in 1:size(grid, 2), i in 1:size(grid, 1)
@@ -202,7 +202,7 @@ function reputationoperator(equilibrium, t; side = :right, nearzeroshare = 0.95,
         push!(rates, -(λ⁺ + λ⁻ + λₐ))
         # Regime diagnostics refer to the conjectured non-committed policy under either true type.
         regimes = reputationtaxregimes(a, τ, mandate, parameters, tolerance)
-        preferred = (2model.climate.γ * firm.A^2 / household.ν) / (1 + 2model.climate.γ * firm.A^2 * (firm.η - a) / household.ν)
+        preferred = statictax(a, household, firm, model.climate)
         wedge = a ≥ firm.η ? 0 : τ - min(preferred, mandate)
         labour = n(τᵉ, a, household, firm)
         actualtax = committed ? mandate : τ
@@ -212,7 +212,7 @@ function reputationoperator(equilibrium, t; side = :right, nearzeroshare = 0.95,
 end
 
 "Columns: belief, tax, expected tax, a, q, investment, labour, output, emissions, cumulative emissions; cases: known commitment, uncertain committed, uncertain non-committed."
-function simulatecommitment(equilibrium; initialbelief = 0.9, timestep = 0.25)
+function simulatecommitment(equilibrium; initialbelief = 0.9, timestep = 0.25, diagnostics = false)
     solution = equilibrium.solution
     parameters = solution.parameters
     grid, firm = parameters.grid, parameters.model.firm
@@ -230,6 +230,7 @@ function simulatecommitment(equilibrium; initialbelief = 0.9, timestep = 0.25)
     times = sort!(vcat(mesh, jumps))
     T = eltype(first(solution.u).q)
     trajectories = zeros(T, length(times), 10, 3)
+    statistics = diagnostics ? zeros(T, length(times), 4, 3) : nothing
     initialmass = reputationinitialmass(grid, initialbelief, firm.a₀)
     probability = hcat(reputationinitialmass(grid, 1, firm.a₀), initialmass, initialmass)
     cumulative = zeros(T, 3)
@@ -264,12 +265,26 @@ function simulatecommitment(equilibrium; initialbelief = 0.9, timestep = 0.25)
                         trajectories[row + phase, column, case] = LA.dot(view(objects, :, objectcolumn), view(probability, :, case))
                     end
                     trajectories[row + phase, 10, case] = cumulative[case]
+                    if diagnostics
+                        active = objects[:, 12] .== 0
+                        mass = view(probability, :, case)
+                        activemass = sum(mass[active])
+                        statistics[row + phase, 1, case] = 1 - activemass
+                        if activemass > 1e-10
+                            statistics[row + phase, 2, case] = LA.dot(objects[active, 2], mass[active]) / activemass
+                            statistics[row + phase, 3, case] = LA.dot(objects[active, 3], mass[active]) / activemass
+                            mandate = path(t; side = phase == 1 ? :left : :right)
+                            statistics[row + phase, 4, case] = max(mandate - statistics[row + phase, 2, case], 0)
+                        else
+                            statistics[row + phase, 2:4, case] .= NaN
+                        end
+                    end
                 end
             end
         end
         row += phases
     end
-    return times, trajectories
+    return diagnostics ? (times, trajectories, statistics) : (times, trajectories)
 end
 
 "Expected paths before and after unexpected news; cumulative emissions are a passive outcome."

@@ -10,7 +10,7 @@ const realfirmdiscount = realhouseholddiscount
 # The zero-tax allocation is normalised to n(0) = 1, y(0) = y₀, and gross emissions ẽ₀.
 const defaultA = y₀
 const defaultν = defaultA
-const defaultφᴸ = 1.
+const defaultφᴸ = 2. # Inverse Frisch elasticity; labour-supply elasticity is 0.5.
 const defaultηᴱ = ẽ₀ / defaultA
 const a₀ = (ẽ₀ - e₀) / defaultA
 
@@ -24,8 +24,9 @@ const defaultreferencetax = (2defaultγ * defaultA^2 / defaultν) / (1 + 2defaul
 const defaultreferenceemissions = e₀ * (1 - (defaultηᴱ - a₀) * defaultimplementation * defaultreferencetax)
 const defaultκₚ = defaultbᴾ * defaultreferenceemissions * defaultreferencetax / defaultimplementation # [trillion USD-equivalent / year]
 
-const defaultdietzϕ = 3e-5 # Dietz-Venmans MAC slope in abatement flow y₀a
-const defaultadjustmenthorizon = 70. # [years]
-const defaultξ = defaultdietzϕ * y₀^3 * defaultadjustmenthorizon^2 / (1 + realfirmdiscount * defaultadjustmenthorizon)
+const defaultabatementcost = 3e-5 * 41.9^2 # Original global cost scale, expressed in abatement fractions a/η.
+const defaultadjustmenthorizon = 30. # [years]
+const defaultκ = defaultabatementcost * y₀ / (realfirmdiscount * defaultηᴱ^2)
+const defaultξ = defaultabatementcost * y₀ * defaultadjustmenthorizon^2 / ((1 + realfirmdiscount * defaultadjustmenthorizon) * defaultηᴱ^2)
 
 const σ̂ = 0.38

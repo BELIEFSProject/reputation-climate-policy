@@ -1,6 +1,7 @@
 ## Setup
-
 using Revise
+
+import FastClosures: @closure
 
 import DotEnv
 import JLD2
@@ -38,7 +39,6 @@ includet("colours.jl")
 includet("reputationutils.jl")
 
 ## Configuration
-
 background = Colors.colorant"#FAFAFA"
 CairoMakie.set_theme!(publicationtheme)
 CairoMakie.update_theme!(backgroundcolor = background, Axis = (; backgroundcolor = background), Legend = (; backgroundcolor = background))
@@ -53,7 +53,6 @@ plotpath = get(ENV, "PLOTPATH", joinpath(rootdirectory, "figures"))
 solutionfile = get(ENV, "REPUTATION_SOLUTION", "")
 
 ## Load the saved equilibrium
-
 household, firm, government, signal, climate = initmodels()
 
 if isempty(solutionfile)
@@ -93,7 +92,7 @@ basefigurepath = joinpath(plotpath, splitext(basename(baseline.filename))[1], "r
 figurepath = joinpath(basefigurepath, "commitment")
 mkpath(figurepath)
 benchmark = loadreputationbenchmark(baseline, joinpath(datapath, "solutions"))
-ts, paths = simulatecommitment(baseline; initialbelief = φ₀, timestep = Δt)
+ts, paths, diagnostics = simulatecommitment(baseline; initialbelief = φ₀, timestep = Δt, diagnostics = true)
 benchmarkvalues = zeros(eltype(ts), length(ts), 10)
 
 for (k, t) in enumerate(ts)
@@ -119,7 +118,7 @@ colours = (defaultpalette[:guide], defaultpalette[:committed], defaultpalette[:a
 columns = (2, 3, 1, 4, 5, 6, 7, 8, 9, 10)
 scales = (taxfactor, taxfactor, 1, firm.η, c(firm), firm.η, n(0, firm.a₀, household, firm), 1, 1, 1)
 series = [hcat(benchmarkvalues[:, column], paths[:, column, :]) ./ scale for (column, scale) in zip(columns, scales)]
-titles = ("Carbon policy", "Expected carbon policy", "Reputation", "Abatement", "Value of abatement investment", "Abatement investment", "Labour", "Output", "Emissions", "Cumulative emissions")
+titles = ("Mean carbon tax rate", "Expected carbon policy", "Reputation", "Abatement", "Value of abatement investment", "Abatement investment", "Labour", "Output", "Emissions", "Cumulative emissions")
 labels = ("USD/tCO₂e", "USD/tCO₂e", "Probability of commitment", "Share of abatement capacity", L"$q/c$", "Share of capacity installed per year", "Labour / zero-tax labour", "Trillion USD/year", "GtCO₂e/year", "GtCO₂e")
 filenames = ("policy", "expected-policy", "belief", "abatement", "valuation", "investment", "labour", "output", "emissions", "cumulative-emissions")
 
@@ -139,8 +138,27 @@ for panel in eachindex(series)
     end
 
     CairoMakie.Legend(figure[2, 1], axis; orientation = :horizontal, tellwidth = false)
-    CairoMakie.Label(figure[3, 1], Printf.@sprintf("Common Markov grid; private-information prior %.0f%%; no additional news shock", 100φ₀); fontsize = publicationdefault(:annotationfontsize), color = defaultpalette[:guide], tellwidth = false)
+    caption = panel == 1 ? "Includes net-zero states, where the tax rate has no effect on emissions" : Printf.@sprintf("Common Markov grid; private-information prior %.0f%%; no additional news shock", 100φ₀)
+    CairoMakie.Label(figure[3, 1], caption; fontsize = publicationdefault(:annotationfontsize), color = defaultpalette[:guide], tellwidth = false)
     savepublicationfigure(joinpath(figurepath, filenames[panel]), figure)
+end
+
+gapfig = CairoMakie.Figure(size = figuresize, backgroundcolor = background)
+gapaxis = CairoMakie.Axis(gapfig[1, 1]; xlabel = "Years since announcement", ylabel = "USD/tCO₂e", title = "Tax shortfall before full abatement", limits = ((0, horizon), (0, nothing)))
+for case in 2:3
+    CairoMakie.lines!(gapaxis, ts, diagnostics[:, 4, case] ./ taxfactor; color = colours[case + 1], linewidth = publicationdefault(:medianlinewidth), label = cases[case + 1])
+end
+CairoMakie.Legend(gapfig[2, 1], gapaxis; orientation = :horizontal, tellwidth = false)
+CairoMakie.Label(gapfig[3, 1], L"$\mathbb{E}[\tau^{\mathrm{c}}-\tau\mid a<\eta]$; net-zero states excluded"; fontsize = publicationdefault(:annotationfontsize), color = defaultpalette[:guide], tellwidth = false)
+savepublicationfigure(joinpath(figurepath, "policy-gap"), gapfig)
+
+open(joinpath(figurepath, "diagnostics.csv"), "w") do file
+    println(file, "case,time,capacitymass,taxbelowcapacityUSD,expectedtaxbelowcapacityUSD,gapbelowcapacityUSD,activegapcontributionUSD")
+    for case in 1:3, k in eachindex(ts)
+        capacity = diagnostics[k, 1, case]
+        values = diagnostics[k, 2:4, case] ./ taxfactor
+        println(file, join((cases[case + 1], ts[k], capacity, values..., (1 - capacity) * values[3]), ","))
+    end
 end
 
 checkfig = CairoMakie.Figure(size = figuresize, backgroundcolor = background)
@@ -162,5 +180,6 @@ open(joinpath(figurepath, "paths.csv"), "w") do file
 end
 
 @info "Commitment comparison" terminalabatement = series[4][end, :] terminalemissions = series[9][end, :] cumulativeemissions = series[10][end, :]
+@info "Commitment comparison gaps" maximumabatementgap = maximum(abs, paths[:, 4, 2] .- paths[:, 4, 3]) / firm.η maximumemissionsgap = maximum(abs, paths[:, 9, 2] .- paths[:, 9, 3]) terminalcapacitymass = diagnostics[end, 1, :]
 
 @info "Saved commitment comparison figures" directory = figurepath

@@ -15,8 +15,51 @@ struct CommittedBVPSolution{M, I, V, T, R}
 end
 
 "Lowest stationary price supporting marginal abatement at zero emissions."
-function committedsupportingtax(model::LinearLabourModel)
+function committedsupportingtax(model::AbstractModel)
     model.household.r * c(model.firm) / y(n(0, model.firm.η, model.household, model.firm), model.firm)
+end
+
+"Square-root labour supply: solve the stationary condition in sqrt(1-(η-a)τ)."
+function committedtax(a, λq, model::Model)
+    @unpack household, firm, climate = model
+    if household.ϕ != 2
+        throw(ArgumentError("The committed solver supports inverse Frisch elasticities 1 and 2."))
+    end
+    output = y(n(0, firm.η, household, firm), firm)
+    if a ≥ firm.η
+        return climate.γ * output
+    end
+
+    gap = firm.η - a
+    upper = min(inv(firm.η), inv(gap))
+    quadratic, linear, constant = gap + 3λq, 2climate.γ * gap^2 * output, gap + λq
+    discriminant = linear^2 + 4quadratic * constant
+    roots = if iszero(quadratic)
+        iszero(linear) ? (-1, -1) : (constant / linear, -1)
+    elseif discriminant > 0
+        ((sqrt(discriminant) - linear) / (2quadratic), -(sqrt(discriminant) + linear) / (2quadratic))
+    else
+        (-1, -1)
+    end
+
+    # Subtract the zero-tax Hamiltonian analytically to retain accuracy near capacity.
+    objective = function (τ)
+        fraction = sqrt(max(1 - gap * τ, 0))
+        return gap^2 * τ * (τ * (fraction + 2) / (3 * (1 + fraction)^2) - climate.γ * output) - λq * τ * fraction
+    end
+    tax, value = zero(a + λq), zero(a + λq)
+    if objective(upper) < value
+        tax, value = upper, objective(upper)
+    end
+    for fraction in roots
+        if 0 ≤ fraction ≤ 1
+            candidate = iszero(quadratic) ? (1 - fraction^2) / gap : (2λq + linear * fraction) / (gap * quadratic)
+            if 0 ≤ candidate ≤ upper && objective(candidate) < value
+                tax, value = candidate, objective(candidate)
+            end
+        end
+    end
+    return tax
 end
 
 "Bounded Hamiltonian minimisation, with the pre-contact price convention at full abatement."
@@ -42,13 +85,14 @@ function committedtax(a, λq, model::LinearLabourModel)
 end
 
 "Regular field on reversed time s∈[0,1]; BVProblem supplies (x[3]-x[4])/s."
-function committeddrift!(dx, x, model::LinearLabourModel, s)
+function committeddrift!(dx, x, model::AbstractModel, s)
     @unpack household, firm, climate = model
 
     ascale = firm.η - firm.a₀
-    tscale = sqrt(2firm.ξ * ascale / (climate.γ * firm.A^2))
+    output = y(n(0, firm.η, household, firm), firm)
+    tscale = sqrt(2firm.ξ * ascale / (climate.γ * output^2))
     qscale = firm.ξ * ascale / tscale
-    λscale = climate.γ * firm.A^2 / household.ν * ascale^2
+    λscale = climate.γ * output * ascale^2
     duration = tscale * exp(x[5])
 
     a = firm.η - ascale * x[1]
@@ -68,7 +112,7 @@ function committeddrift!(dx, x, model::LinearLabourModel, s)
     return nothing
 end
 
-function committedboundary!(residual, states, model, mesh, initialshadow = 0)
+function committedboundary!(residual, states, _, _, initialshadow)
     terminal, initial = first(states), last(states)
 
     residual[1] = terminal[1]                 # a=η.
@@ -79,40 +123,43 @@ function committedboundary!(residual, states, model, mesh, initialshadow = 0)
     return nothing
 end
 
-function initialcommittedguess(model, s, initialshadow = 0)
+function initialcommittedguess(_, s, initialshadow)
     shadow = -s^3 * (1 - s)^2 + initialshadow * s^5
     shadowslope = -3s^2 * (1 - s)^2 + 2s^3 * (1 - s) + 5initialshadow * s^4
     # Ordinary vectors avoid the MVector cache-copy bug during sparsity tracing.
     return [s^2, 2s, shadow + s * shadowslope, shadow, 0]
 end
 
-function committedproblem(model::LinearLabourModel; initialtax = nothing)
-    initialshadow = if isnothing(initialtax)
-        0
-    else
-        @unpack household, firm, climate = model
-        output = firm.A^2 / household.ν
-        gap = firm.η - firm.a₀
-        λscale = climate.γ * output * gap^2
+function initialshadowcost(τ₀, model)
+    @unpack household, firm, climate = model
+    output = y(n(0, firm.η, household, firm), firm)
+    gap = firm.η - firm.a₀
+    λscale = climate.γ * output * gap^2
 
-        if !(0 ≤ initialtax ≤ inv(firm.η))
-            throw(ArgumentError("The initial tax must lie in [0,1/η]."))
-        end
+    # Invert the initial Hamiltonian FOC at a=a₀.
+    ϕ = inversefrisch(household)
+    initialoutput = y(n(τ₀, firm.a₀, household, firm), firm)
+    λinitial = gap^2 * (τ₀ - 2climate.γ * initialoutput) / (ϕ - (1 + ϕ) * gap * τ₀)
 
-        # Invert the initial Hamiltonian FOC at a=a₀.
-        λinitial = (κ₁(firm.a₀, household, firm, climate) + κ₂(firm.a₀, household, firm, climate) * initialtax) / (output * (1 - 2gap * initialtax))
-        curvature = κ₂(firm.a₀, household, firm, climate) + 2output * gap * λinitial
-        if !isfinite(λinitial) || curvature ≤ 0
-            throw(ArgumentError("The initial tax must be supported by a convex Hamiltonian tax minimum."))
-        end
-        λinitial / λscale
+    return λinitial / λscale
+end
+
+function committedproblem(model::AbstractModel; initialtax = nothing)
+    if inversefrisch(model.household) ∉ (1, 2)
+        throw(ArgumentError("The committed solver supports inverse Frisch elasticities 1 and 2."))
+        # FIXME: Make a specialised solver for a model type with φ = 2, similar to the linear one.
     end
 
-    boundary! = (residual, states, model, mesh) -> committedboundary!(residual, states, model, mesh, initialshadow)
-    guess = (model, s) -> initialcommittedguess(model, s, initialshadow)
-    singular = zeros(5, 5)
-    singular[4, 3], singular[4, 4] = 1, -1
-    return BVP.BVProblem(committeddrift!, boundary!, guess, (0.0, 1.0), model; singular_term = singular, nlls = Val(false))
+    initialshadow = isnothing(initialtax) ? 0 : initialshadowcost(initialtax, model)
+
+    boundary! = @closure (residual, states, model, mesh) -> committedboundary!(residual, states, model, mesh, initialshadow)
+    guess = @closure (model, s) -> initialcommittedguess(model, s, initialshadow)
+
+    singular_term = zeros(5, 5)
+    singular_term[4, 3] = 1
+    singular_term[4, 4] = -1
+
+    return BVP.BVProblem(committeddrift!, boundary!, guess, (0.0, 1.0), model; singular_term, nlls = Val(false))
 end
 
 "Hermite interpolation with the complete singular field, used for welfare quadrature."
@@ -126,6 +173,7 @@ function committedinterpolate(solution, s)
 
     committeddrift!(dl, left, solution.prob.p, sl)
     committeddrift!(dr, right, solution.prob.p, sr)
+
     if sl > 0
         dl[4] += (left[3] - left[4]) / sl
     end
@@ -135,22 +183,24 @@ function committedinterpolate(solution, s)
 end
 
 "Solve the full-interval committed BVP; initialtax anchors an inherited plan instead of imposing λq(0)=0."
-function solvecommitted(model::LinearLabourModel; initialtax = nothing, intervals = 100, verbose = 1)
+function solvecommitted(model::AbstractModel; initialtax = nothing, intervals = 100, verbose = 1)
     @unpack household, firm, climate = model
     problem = committedproblem(model; initialtax)
 
     if verbose > 0
         @info "Solving committed BVP" intervals initialtax
     end
+
     solution = BVP.solve(problem, BVP.MIRK4(); dt = inv(intervals), adaptive = false, verbose = verbose > 1)
     if !SciMLBase.successful_retcode(solution)
         @warn "Committed BVP failed with return code $(solution.retcode)."
     end
 
     ascale = firm.η - firm.a₀
-    tscale = sqrt(2firm.ξ * ascale / (climate.γ * firm.A^2))
+    output = y(n(0, firm.η, household, firm), firm)
+    tscale = sqrt(2firm.ξ * ascale / (climate.γ * output^2))
     qscale = firm.ξ * ascale / tscale
-    λscale = climate.γ * firm.A^2 / household.ν * ascale^2
+    λscale = climate.γ * output * ascale^2
     duration = tscale * exp(first(solution.u)[5])
 
     s = reverse(solution.t)
@@ -162,26 +212,30 @@ function solvecommitted(model::LinearLabourModel; initialtax = nothing, interval
     λₐ = [firm.ξ * λscale * x[3] / duration - value for (x, value) in zip(states, q)]
     investment = (q .- c(firm)) ./ firm.ξ
     tax = similar(a)
+
     map!((state, shadow) -> committedtax(state, shadow, model), tax, a, λq)
+    tax[end] = climate.γ * output # The terminal convention must not depend on roundoff in a=η.
 
     residual = similar(first(solution.u))
     problem.f.bc(residual, solution.u, model, solution.t)
     boundarygap = maximum(abs, residual)
     baseline = κ₀(firm.η, household, firm, climate)
 
-    cost = function (s)
+    cost = @closure (s) -> begin
         x = committedinterpolate(solution, s)
         state = firm.η - ascale * x[1]
         shadow = s * λscale * x[4]
         τ = committedtax(state, shadow, model)
         return exp(-household.r * duration * (1 - s)) * (simplifiedcost(τ, state, qscale * x[2] / firm.ξ, household, firm, climate) - baseline)
     end
-    # Baseline/r includes the stationary full-abatement tail.
-    welfarecost = baseline / household.r + duration * first(QGK.quadgk(cost, solution.t...))
 
+    # Baseline/r includes the stationary full-abatement tail.
+    wtail, _ = QGK.quadgk(cost, solution.t...)
+    welfarecost = baseline / household.r + duration * wtail
     if verbose > 0
         @info "Solved committed BVP" duration boundarygap retcode = solution.retcode
     end
+
     return CommittedBVPSolution(model, initialtax, calendar, a, q, tax, investment, λₐ, λq, welfarecost, duration, boundarygap, solution.retcode)
 end
 

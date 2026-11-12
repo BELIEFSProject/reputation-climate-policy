@@ -5,7 +5,7 @@ Base.@kwdef struct Firm{T} <: AbstractFirm{T}
     a₀::T = a₀
     A::T = defaultA
     η::T = defaultηᴱ
-    κ::T = defaultdietzϕ * y₀^3 / realfirmdiscount
+    κ::T = defaultκ
     ξ::T = defaultξ
 end
 

@@ -2,6 +2,7 @@
 using Revise
 
 import UnPack: @unpack
+import FastClosures: @closure
 
 import Printf
 import JLD2
@@ -30,16 +31,16 @@ household, firm, government, signal, climate = initmodels()
 model = Model(household, firm, climate)
 
 ## Solve
-initialtax = nothing
+τ₀ = nothing # 90 * taxfactor
 intervals = 500
-filename = committedsolutionfilename(model; initialtax, intervals)
+filename = committedsolutionfilename(model; initialtax = τ₀, intervals)
 filepath = joinpath(@__DIR__, "..", "data", "solutions", filename)
 
 if isfile(filepath)
     error("Committed benchmark already exists at $filepath; preserving the saved solution.")
 end
 
-solution = solvecommitted(model; initialtax, intervals)
+solution = solvecommitted(model; initialtax = τ₀, intervals)
 taxpath = CommittedTaxPath(solution)
 
 ## Plot the tax
@@ -53,7 +54,7 @@ if isinteractive()
     afig = Plots.twinx(fig)
     Plots.plot!(afig, taxpath.ts, [firm.a₀, solution.a...]; c = :darkgreen, ylims = (0, 1.05 * firm.η), xlims = extrema(taxpath.ts), ylabel = "Abatemnet", yguidefontcolor = :darkgreen, label = false, linewidth = 2.5)
 
-    Plots.hline!(afig, [firm.η]; c = :black, linestyle = :dash, label = "Zero emissions")
+    Plots.hline!(afig, [firm.η]; c = :darkgreen, linestyle = :dash, label = "Zero emissions")
 
     fig
 end

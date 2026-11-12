@@ -26,7 +26,7 @@ function n′(ω, household::Household)
     ((ω / household.ν)^(1 / household.ϕ - 1)) / (household.ϕ * household.ν)
 end
 
-# Sepcialise methods for φ = 1
+# Specialise unit-elastic labour supply.
 struct LinearHousehold{T} <: AbstractHousehold{T}
     ν::T
     r::T
@@ -42,3 +42,6 @@ end
 function n′(household::LinearHousehold)
     inv(household.ν)
 end
+
+inversefrisch(household::Household) = household.ϕ
+inversefrisch(::LinearHousehold) = 1

@@ -1,4 +1,18 @@
-The plotting scripts for the current Markov solution are `reputation.jl`, `commitment.jl` and `dynamic.jl`.
+The plotting scripts are `calibration.jl` for the primitives and `reputation.jl`, `commitment.jl` and `dynamic.jl` for the current Markov solution.
+
+## Calibration
+
+Run `julia --project=. scripts/plotting/calibration.jl` to illustrate the current primitives without loading or solving an equilibrium. The script accepts the same parameter overrides as the solver scripts. Seven separate 16:9 PDF/PNG figures are saved under `PLOTPATH/calibration-<12-character hash>/`, using the publication theme and `#FAFAFA` background:
+
+- `labour`: tax responses at initial abatement, comparing the baseline Frisch elasticity with 0.5 and 1.
+- `emissions`: emissions across installed abatement at three fixed tax rates, with the initial emissions reference.
+- `welfare`: labour distortion, climate damages and their combined change relative to zero tax, holding abatement fixed and investment at zero.
+- `prices`: the preferred static tax, pre-contact Ramsey price and lowest permanent supporting price. The static rule excludes the capacity endpoint, where the zero-rate convention would otherwise produce a misleading drop.
+- `costs`: installation and adjustment costs as shares of zero-tax output against annual abatement progress.
+- `investment`: the private investment response to `q/c`, including the irreversible-investment threshold.
+- `learning`: the time for a unit signal-to-noise ratio at fixed tax gaps and three noise levels, `t = [σ/(ϵ*Δτ)]²`. This is an information diagnostic, not a posterior hitting time or an equilibrium forecast.
+
+The 24-year constant-progress reference in the cost and investment figures is illustrative; it does not impose a stopping time or change the adjustment-cost calibration. `parameters.csv` records the primitives and derived reference quantities. Each calibration has its own figure folder; saved numerical solutions are untouched.
 
 ## Stochastic dynamics of the current Markov solution
 
@@ -41,13 +55,14 @@ Each plot is exported separately as a 16:9 PDF and a 1920×1080 PNG under `PLOTP
 - `reputation-transition-{belief,policy,abatement,emissions}`: expected reputation, implemented policy, abatement and cumulative emissions with and without the news. The two cases have the same distribution before the intervention. Repeated news dates draw the instantaneous posterior update explicitly.
 - `commitment/{policy,expected-policy,belief,abatement,valuation,investment,labour,output,emissions,cumulative-emissions}`: compare known commitment with type-conditional mean paths under a committed and a non-committed government, all on the same Markov grid. Both private-information cases start from the same initial reputation and receive no additional news shock. Belief and abatement are shares, investment is a capacity share per year, valuation is `q/c`, labour is relative to zero-tax labour, and output is in trillion USD/year. `commitment/paths.csv` contains these three paths and the continuous Ramsey reference.
 - `commitment/benchmark-abatement`: compare the known-commitment Markov simulation with the saved continuous Ramsey BVP. The BVP is matched by model parameters and the complete announced policy, including its tail. Keeping this numerical check separate prevents a discrepancy between the two approximations from being attributed to reputation. The short filenames in this subdirectory also avoid Windows path-length limits.
+- `commitment/policy-gap`: the expected tax shortfall conditional on being below full abatement, comparing the two true types with the same initial reputation. `commitment/diagnostics.csv` reports capacity probabilities, conditional actual and expected rates, and the contribution of below-capacity states to the unconditional tax shortfall. At full abatement the non-committed rate is zero by convention; a difference in mean rates there need not imply a difference in allocations or emissions.
 - `reputation-shock-timing-{emissions,abatement}`: vary the arrival date of the same adverse news. The horizontal axis measures baseline abatement progress from `a₀` towards baseline long-run expected abatement; labels at selected points give the corresponding pre-shock expected emissions. The emissions figure shows the percentage change in cumulative emissions to the common saved horizon. The companion figure reports the percentage change in long-run abatement.
 - `ets-information-channel-{separation,belief-volatility,best-response}`: how signal noise changes learning, belief volatility and the government's hidden best response at fixed baseline forecasts and continuation values. This is a local information diagnostic, not a re-solved equilibrium comparison.
 - `ets-equilibrium-comparison-{emissions,near-zero,welfare}`: emitted only when otherwise matching saved equilibria with different signal noise are available. These compare cumulative emissions, the probability of reaching 95% abatement by the common horizon, and household welfare costs. Compatible solutions must use the same model, announced policy, grid, time step, tolerances and saved dates.
 - `tax-regime-map-{incentive,announcement-gap,reputation-wedge}`: the intrinsic downward-deviation incentive `τᶜ−τP(a)`, the stored policy's distance from the announcement, and its difference from the feasible static benchmark `min(τP(a),τᶜ)`. The capacity column is excluded because the static tax is indeterminate there.
 - `tax-regime-exposure-{incentive,pooling,wedge}`: the mean transition in the intrinsic incentive regions, probability-weighted pooling shares, and the mean absolute reputational tax wedge in USD/tCO₂e. Both shares and wedge magnitudes condition on being below full capacity and are omitted once that probability is below `1e-10`.
 
-The reputation script exports 21 separate plots when matching noise equilibria are available, or 18 with only the baseline. The commitment script exports 11 additional figures independently. Earlier multi-panel exports are preserved but are no longer regenerated.
+The reputation script exports 21 separate plots when matching noise equilibria are available, or 18 with only the baseline. The commitment script exports 12 additional figures independently. Earlier multi-panel exports are preserved but are no longer regenerated.
 
 Under the committed type the actual tax is the announcement and the belief drift is `φ(1−φ)²χ²`; under the non-committed type it is `−φ²(1−φ)χ²`. Firms use the same equilibrium expected policy and valuation functions at a given public state under either true type. Both forward generators retain the solved chain's common diffusion stencil. The comparison therefore distinguishes known commitment from commitment that firms must learn about. Repeated announcement dates retain the left and right limits of tax and allocation jumps. Cumulative emissions use the same endpoint quadrature and common horizon across all three cases. These are conditional mean paths, computed from forward probabilities rather than Monte Carlo draws.
 

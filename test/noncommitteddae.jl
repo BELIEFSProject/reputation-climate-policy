@@ -28,6 +28,20 @@ testmodel = Model(testhousehold, testfirm, Climate(; γ = 0.02))
 testgovernment = Government(; κₚ = 0.5, b = 0.3)
 testsignal = Signal(; ϵ = 1.0, σ = 0.5)
 
+@testset "EU investment costs preserve the reference cost share" begin
+    european = Firm()
+    output, emissions = 197.231, 41.9
+    intensity = emissions / output
+    initialshare = european.a₀ / european.η
+    coefficient = 3e-5
+    horizon = defaultadjustmenthorizon
+    reference = Firm(; e₀ = (1 - initialshare) * emissions, a₀ = initialshare * intensity, A = output, η = intensity, κ = coefficient * output^3 / realfirmdiscount, ξ = coefficient * output^3 * horizon^2 / (1 + realfirmdiscount * horizon))
+    for progressrate in (0.0, 0.005, 0.02)
+        @test k(european.η * progressrate, european) / european.A ≈ k(reference.η * progressrate, reference) / reference.A
+    end
+    @test realfirmdiscount * c(european) * (european.η - european.a₀) / european.A ≈ realfirmdiscount * c(reference) * (reference.η - reference.a₀) / reference.A
+end
+
 @testset "Explicit welfare coefficients and constant installation price" begin
     @test c(testfirm) == testfirm.κ * testfirm.a₀
     @test k(0.2, testfirm) ≈ c(testfirm) * 0.2 + testfirm.ξ * 0.2^2 / 2
@@ -39,6 +53,29 @@ testsignal = Signal(; ϵ = 1.0, σ = 0.5)
     end
     @test κ₁(testfirm.η, testhousehold, testfirm, testmodel.climate) == 0
     @test κ₂(testfirm.η, testhousehold, testfirm, testmodel.climate) == 0
+end
+
+@testset "Nonlinear labour supply uses the primitive welfare flow" begin
+    household = Household(; ν = 0.8, ϕ = 2.0, r = 0.1)
+    for a in (0.1, 0.55, 0.99), τ in (0.0, 0.2, 0.8)
+        labour = n(τ, a, household, testfirm)
+        resourcecost = k(0.2, testfirm) + v(labour, household) - y(labour, testfirm) * (1 - d(e(labour, a, testfirm), testmodel.climate))
+        cost(tax) = simplifiedcost(tax, a, 0.2, household, testfirm, testmodel.climate)
+        @test cost(τ) ≈ resourcecost
+        @test ∂ₜsimplifiedcost(τ, a, household, testfirm, testmodel.climate) ≈ FD.derivative(cost, τ) atol = 1e-11
+        @test ∂ₜₜsimplifiedcost(τ, a, household, testfirm, testmodel.climate) ≈ FD.derivative(tax -> FD.derivative(cost, tax), τ) atol = 1e-11
+        @test ∂ₐsimplifiedcost(τ, a, 0.2, household, testfirm, testmodel.climate) ≈ FD.derivative(state -> simplifiedcost(τ, state, 0.2, household, testfirm, testmodel.climate), a) atol = 1e-11
+    end
+
+    for a in (0.1, 0.55, 0.99)
+        preferred = statictax(a, household, testfirm, testmodel.climate)
+        objective(τ) = simplifiedcost(τ, a, 0.0, household, testfirm, testmodel.climate)
+        taxes = range(0.0, inv(testfirm.η); length = 12001)
+        @test objective(preferred) ≤ minimum(objective, taxes) + 1e-12
+    end
+    zerotaxlabour = n(0, testfirm.η, household, testfirm)
+    capcost = v(zerotaxlabour, household) - y(zerotaxlabour, testfirm)
+    @test simplifiedcost(0.8, testfirm.η, 0.0, household, testfirm, testmodel.climate) ≈ capcost
 end
 
 @testset "Announcement jumps retain the correct one-sided mandate" begin
@@ -228,6 +265,46 @@ end
     end
 end
 
+@testset "Nonlinear labour policy minimises the frozen hidden Hamiltonian" begin
+    household = Household(; ν = 0.8, ϕ = 2.0, r = 0.1)
+    model = Model(household, testfirm, testmodel.climate)
+    mandate, tax = 0.6, 0.2
+    parameters = NonCommittedDAEParameters(CommittedTaxPath([mandate, mandate], [0.0, 1.0]), model, testgovernment, testsignal; h = 0.5)
+    grid = parameters.grid
+    i, j = 2, 2
+    φ, a = physicalstate(grid, i, j)
+    τᵉ = noncommittedexpectedtax(φ, tax, mandate)
+    B = φ * (1 - φ) * (testsignal.ϵ / testsignal.σ)^2 * (mandate - tax)
+    taxes = range(0.0, mandate; length = 12001)
+    for slope in (-0.2, -0.01, 0.0, 0.01, 0.2)
+        uᵍ = [slope * physicalstate(grid, row, column)[1] for row in 1:size(grid, 1), column in 1:size(grid, 2)]
+        value = NonCommittedMarkovValue(0.5, grid, fill(0.7, size(grid)), uᵍ, copy(uᵍ), fill(tax, size(grid)))
+        x = reshape(noncommitteddaestate(value, parameters), 4, size(grid)...)
+        candidate, improvement = noncommitteddaetax(x, tax, i, j, mandate, parameters)
+        objective(τ) = simplifiedcost(τ, a, 0.0, household, testfirm, testmodel.climate) + B * (τ - τᵉ) * slope
+        objectives = map(objective, taxes)
+        @test abs(candidate - taxes[argmin(objectives)]) ≤ 1.01step(taxes)
+        @test objective(candidate) ≤ minimum(objectives) + 1e-12
+        @test improvement ≈ max(objective(tax) - objective(candidate), 0) atol = 1e-10
+    end
+
+    static = statictax(a, household, testfirm, testmodel.climate)
+    for announcement in (static / 2, 2static), slope in (-0.2, 0.0, 0.2)
+        parameters = NonCommittedDAEParameters(CommittedTaxPath([announcement, announcement], [0.0, 1.0]), model, testgovernment, testsignal; h = 0.5)
+        x = zeros(4, size(grid)...)
+        for column in axes(x, 3), row in axes(x, 2)
+            x[2, row, column] = slope * physicalstate(grid, row, column)[1] / parameters.valuescale
+        end
+        candidate, _ = noncommitteddaetax(x, 0, i, j, announcement, parameters; equilibrium = true)
+        response, improvement = noncommitteddaetax(x, candidate, i, j, announcement, parameters)
+        @test candidate ≈ response atol = 1e-10
+        @test improvement ≤ 1e-10
+        if announcement < static
+            @test candidate == announcement
+        end
+    end
+end
+
 @testset "Frozen belief diffusion admits every hidden deviation" begin
     mandate = 0.6
     parameters = NonCommittedDAEParameters(CommittedTaxPath([mandate, mandate], [0.0, 1.0]), testmodel, testgovernment, testsignal; h = 0.25)
@@ -253,39 +330,41 @@ end
 end
 
 @testset "Sparse DAE Jacobian matches the combined residual derivative" begin
-    mandate = 0.6
-    parameters = NonCommittedDAEParameters(CommittedTaxPath([mandate, mandate], [0.0, 1.0]), testmodel, testgovernment, testsignal; h = 0.5)
-    grid = parameters.grid
-    prototype = noncommitteddaejacobian(parameters)
-    autodiff = ADTypes.AutoSparse(ADTypes.AutoForwardDiff(); sparsity_detector = ADTypes.KnownJacobianSparsityDetector(prototype), coloring_algorithm = SMC.GreedyColoringAlgorithm())
-    residual! = (residual, dx, x, parameters, s) -> noncommitteddaeresidual!(residual, dx, x, parameters, s)
-    pattern = falses(size(prototype))
-    for column in axes(prototype, 2), entry in SP.nzrange(prototype, column)
-        pattern[SP.rowvals(prototype)[entry], column] = true
-    end
+    for model in (testmodel, Model(Household(; ν = 0.8, ϕ = 2.0, r = 0.1), testfirm, testmodel.climate))
+        mandate = 0.6
+        parameters = NonCommittedDAEParameters(CommittedTaxPath([mandate, mandate], [0.0, 1.0]), model, testgovernment, testsignal; h = 0.5)
+        grid = parameters.grid
+        prototype = noncommitteddaejacobian(parameters)
+        autodiff = ADTypes.AutoSparse(ADTypes.AutoForwardDiff(); sparsity_detector = ADTypes.KnownJacobianSparsityDetector(prototype), coloring_algorithm = SMC.GreedyColoringAlgorithm())
+        residual! = (residual, dx, x, parameters, s) -> noncommitteddaeresidual!(residual, dx, x, parameters, s)
+        pattern = falses(size(prototype))
+        for column in axes(prototype, 2), entry in SP.nzrange(prototype, column)
+            pattern[SP.rowvals(prototype)[entry], column] = true
+        end
 
-    for active in (false, true)
-        q = [0.2 + 0.01physicalstate(grid, i, j)[1] for i in 1:size(grid, 1), j in 1:size(grid, 2)]
-        q[:, end] .= active ? 1.2c(testfirm) : 0.5c(testfirm)
-        uᵍ = [1 + 0.2physicalstate(grid, i, j)[1] + 0.03physicalstate(grid, i, j)[2] for i in 1:size(grid, 1), j in 1:size(grid, 2)]
-        u = [2 + 0.3physicalstate(grid, i, j)[1] + 0.01physicalstate(grid, i, j)[2] for i in 1:size(grid, 1), j in 1:size(grid, 2)]
-        value = NonCommittedMarkovValue(0.5, grid, q, uᵍ, u, fill(0.2, size(grid)))
-        x = noncommitteddaestate(value, parameters)
-        dx = similar(x)
-        noncommitteddaefield!(dx, x, parameters, 0.5)
-        jacobian! = noncommitteddaejacobian(residual!, dx, x, parameters, 0.5, autodiff)
-        for γ in (0.0, 0.7, 1.0)
-            residual = function (z)
-                result = similar(z)
-                residual!(result, dx .+ γ .* (z .- x), z, parameters, 0.5)
-                return result
+        for active in (false, true), slope in (-0.01, 0.2)
+            q = [0.2 + 0.01physicalstate(grid, i, j)[1] for i in 1:size(grid, 1), j in 1:size(grid, 2)]
+            q[:, end] .= active ? 1.2c(testfirm) : 0.5c(testfirm)
+            uᵍ = [1 + slope * physicalstate(grid, i, j)[1] + 0.03physicalstate(grid, i, j)[2] for i in 1:size(grid, 1), j in 1:size(grid, 2)]
+            u = [2 + 0.3physicalstate(grid, i, j)[1] + 0.01physicalstate(grid, i, j)[2] for i in 1:size(grid, 1), j in 1:size(grid, 2)]
+            value = NonCommittedMarkovValue(0.5, grid, q, uᵍ, u, fill(0.2, size(grid)))
+            x = noncommitteddaestate(value, parameters)
+            dx = similar(x)
+            noncommitteddaefield!(dx, x, parameters, 0.5)
+            jacobian! = noncommitteddaejacobian(residual!, dx, x, parameters, 0.5, autodiff)
+            for γ in (0.0, 0.7, 1.0)
+                residual = function (z)
+                    result = similar(z)
+                    residual!(result, dx .+ γ .* (z .- x), z, parameters, 0.5)
+                    return result
+                end
+                reference = FD.jacobian(residual, x)
+                jacobian = copy(prototype)
+                jacobian!(jacobian, dx, x, parameters, γ, 0.5)
+                @test size(prototype) == (length(x), length(x))
+                @test all((abs.(reference) .≤ 1e-10) .| pattern)
+                @test Matrix(jacobian) ≈ reference atol = 1e-10
             end
-            reference = FD.jacobian(residual, x)
-            jacobian = copy(prototype)
-            jacobian!(jacobian, dx, x, parameters, γ, 0.5)
-            @test size(prototype) == (length(x), length(x))
-            @test all((abs.(reference) .≤ 1e-10) .| pattern)
-            @test Matrix(jacobian) ≈ reference atol = 1e-10
         end
     end
 end
@@ -341,16 +420,19 @@ end
 end
 
 @testset "Zero-announcement DAE solution retains calendar values" begin
-    path = CommittedTaxPath([0.0, 0.0], [0.0, 1.0])
-    solution = solvenoncommitteddae(path, testmodel, testgovernment, testsignal; h = 0.5, timestep = 0.5, tolerance = 1e-9, policytolerance = 1e-9, verbose = 0)
-    @test solution.t == [0.0, 0.5, 1.0]
-    for value in solution.u
-        @test maximum(abs, value.q) ≤ 1e-9
-        @test maximum(abs, value.τ) ≤ 1e-9
-        @test value.uᵍ ≈ value.u atol = 1e-9
-        for j in axes(value.u, 2), i in axes(value.u, 1)
-            _, a = physicalstate(value.grid, i, j)
-            @test value.u[i, j] ≈ κ₀(a, testhousehold, testfirm, testmodel.climate) / testhousehold.r atol = 1e-8
+    for household in (testhousehold, Household(; ν = 0.8, ϕ = 2.0, r = 0.1))
+        model = Model(household, testfirm, testmodel.climate)
+        path = CommittedTaxPath([0.0, 0.0], [0.0, 1.0])
+        solution = solvenoncommitteddae(path, model, testgovernment, testsignal; h = 0.5, timestep = 0.5, tolerance = 1e-9, policytolerance = 1e-9, verbose = 0)
+        @test solution.t == [0.0, 0.5, 1.0]
+        for value in solution.u
+            @test maximum(abs, value.q) ≤ 1e-9
+            @test maximum(abs, value.τ) ≤ 1e-9
+            @test value.uᵍ ≈ value.u atol = 1e-9
+            for j in axes(value.u, 2), i in axes(value.u, 1)
+                _, a = physicalstate(value.grid, i, j)
+                @test value.u[i, j] ≈ κ₀(a, household, testfirm, model.climate) / household.r atol = 1e-8
+            end
         end
     end
 end

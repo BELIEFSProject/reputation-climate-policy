@@ -81,6 +81,9 @@ end
 
 function noncommittedstatictax(φ, a, τᶜ, parameters)
     household, firm, climate = parameters.model.household, parameters.model.firm, parameters.model.climate
+    if household isa Household
+        return clamp(statictax(a, household, firm, climate), 0, τᶜ)
+    end
     curvature = κ₂(a, household, firm, climate)
     iszero(curvature) && return zero(τᶜ)
     return clamp(-κ₁(a, household, firm, climate) / curvature, zero(τᶜ), τᶜ)

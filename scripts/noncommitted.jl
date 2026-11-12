@@ -49,7 +49,7 @@ end
 ## Solve
 # h is shared by both normalised states; announcement knots further split the implicit time steps.
 h = 1 / 80
-timestep = 0.1
+timestep = 0.05
 savestep = 1.0 # Calendar years between saved values; independent of the internal time step.
 horizon = last(τᶜ.ts) # The stationary tail is solved at this date.
 

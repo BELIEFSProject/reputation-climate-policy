@@ -1,6 +1,7 @@
 using Test
 
 import UnPack: @unpack
+import FastClosures: @closure
 import BoundaryValueDiffEq as BVP
 import SciMLBase
 import ForwardDiff as FD
@@ -85,58 +86,87 @@ end
 end
 
 @testset "Transformed equations reproduce the state and costate system" begin
-    x, s = [0.4, 0.8, -0.1, -0.02, 0.1], 0.5
-    dx = similar(x)
-    committeddrift!(dx, x, testmodel, s)
-    dx .+= testproblem.singular_term * x / s
+    for household in (testhousehold, Household(; ν = 0.8, ϕ = 2.0, r = 0.1))
+        model = Model(household, testfirm, testmodel.climate)
+        problem = committedproblem(model)
+        x, s = [0.4, 0.8, -0.1, -0.02, 0.1], 0.5
+        dx = similar(x)
+        committeddrift!(dx, x, model, s)
+        dx .+= problem.singular_term * x / s
 
-    ascale = testfirm.η - testfirm.a₀
-    tscale = sqrt(2testfirm.ξ * ascale / (testmodel.climate.γ * testfirm.A^2))
-    qscale = testfirm.ξ * ascale / tscale
-    λscale = testmodel.climate.γ * testfirm.A^2 / testhousehold.ν * ascale^2
-    duration = tscale * exp(x[5])
-    a = testfirm.η - ascale * x[1]
-    q = c(testfirm) + qscale * x[2]
-    λq = s * λscale * x[4]
-    λₐ = testfirm.ξ * λscale * x[3] / duration - q
-    τ = committedtax(a, λq, testmodel)
-    source = y(n(τ, a, testhousehold, testfirm), testfirm) * τ
-    sourcea = testfirm.A * τ * ∂ₐn(τ, a, testhousehold, testfirm)
-    costa = FD.derivative(z -> simplifiedcost(τ, z, 0.0, testhousehold, testfirm, testmodel.climate), a)
-    qdot = -qscale * dx[2] / duration
-    Pdot = -testfirm.ξ * λscale * dx[3] / duration^2
-    @test ascale * dx[1] / duration ≈ (q - c(testfirm)) / testfirm.ξ
-    @test qdot ≈ testhousehold.r * q - source
-    @test -λscale * (x[4] + s * dx[4]) / duration ≈ -(q + λₐ) / testfirm.ξ
-    @test Pdot - qdot ≈ testhousehold.r * λₐ - costa + λq * sourcea
-    @test dx[5] == 0
+        ascale = testfirm.η - testfirm.a₀
+        output = y(n(0, testfirm.η, household, testfirm), testfirm)
+        tscale = sqrt(2testfirm.ξ * ascale / (model.climate.γ * output^2))
+        qscale = testfirm.ξ * ascale / tscale
+        λscale = model.climate.γ * output * ascale^2
+        duration = tscale * exp(x[5])
+        a = testfirm.η - ascale * x[1]
+        q = c(testfirm) + qscale * x[2]
+        λq = s * λscale * x[4]
+        λₐ = testfirm.ξ * λscale * x[3] / duration - q
+        τ = committedtax(a, λq, model)
+        source = y(n(τ, a, household, testfirm), testfirm) * τ
+        sourcea = testfirm.A * τ * ∂ₐn(τ, a, household, testfirm)
+        costa = FD.derivative(z -> simplifiedcost(τ, z, 0.0, household, testfirm, model.climate), a)
+        qdot = -qscale * dx[2] / duration
+        Pdot = -testfirm.ξ * λscale * dx[3] / duration^2
+        @test ascale * dx[1] / duration ≈ (q - c(testfirm)) / testfirm.ξ
+        @test qdot ≈ household.r * q - source
+        @test -λscale * (x[4] + s * dx[4]) / duration ≈ -(q + λₐ) / testfirm.ξ
+        @test Pdot - qdot ≈ household.r * λₐ - costa + λq * sourcea
+        @test dx[5] == 0
+    end
 end
 
 @testset "Tax minimises the bounded Hamiltonian below full abatement" begin
-    for a in (0.2, 0.6, 0.99), λq in (-0.1, -0.001, 0.0, 0.1)
-        tax = committedtax(a, λq, testmodel)
-        objective(τ) = simplifiedcost(τ, a, 0.0, testhousehold, testfirm, testmodel.climate) - λq * y(n(τ, a, testhousehold, testfirm), testfirm) * τ
+    for household in (testhousehold, Household(; ν = 0.8, ϕ = 2.0, r = 0.1)), a in (0.2, 0.6, 0.99), λq in (-0.1, -0.001, 0.0, 0.1)
+        model = Model(household, testfirm, testmodel.climate)
+        tax = committedtax(a, λq, model)
+        objective(τ) = simplifiedcost(τ, a, 0.0, household, testfirm, model.climate) - λq * y(n(τ, a, household, testfirm), testfirm) * τ
         taxes = range(0.0, inv(testfirm.η); length = 2001)
         @test 0 ≤ tax ≤ inv(testfirm.η)
         @test objective(tax) ≤ minimum(objective, taxes) + 1e-12
     end
 end
 
+@testset "Nonlinear labour tax retains costate derivatives and the initial policy option" begin
+    household = Household(; ν = 0.8, ϕ = 2.0, r = 0.1)
+    model = Model(household, testfirm, testmodel.climate)
+    a, λq = 0.4, 0.005
+    tax = committedtax(a, λq, model)
+    objective(τ) = simplifiedcost(τ, a, 0.0, household, testfirm, model.climate) - λq * y(n(τ, a, household, testfirm), testfirm) * τ
+    curvature = FD.derivative(τ -> FD.derivative(objective, τ), tax)
+    levygradient = FD.derivative(τ -> y(n(τ, a, household, testfirm), testfirm) * τ, tax)
+    @test 0 < tax < inv(testfirm.η)
+    @test curvature > 0
+    @test FD.derivative(shadow -> committedtax(a, shadow, model), λq) ≈ levygradient / curvature rtol = 1e-8
+
+    initialtax = 0.02
+    problem = committedproblem(model; initialtax)
+    initial = problem.u0(model, 1.0)
+    output = y(n(0, testfirm.η, household, testfirm), testfirm)
+    λscale = model.climate.γ * output * (testfirm.η - testfirm.a₀)^2
+    @test committedtax(testfirm.a₀, λscale * initial[4], model) ≈ initialtax
+    @test committedsolutionfilename(model) != committedsolutionfilename(testmodel)
+end
+
 @testset "Committed calendar paths and supporting-price jump" begin
-    model = Model(testhousehold, testfirm, Climate(; γ = 0.2))
-    solution = solvecommitted(model; verbose = 0)
-    @test SciMLBase.successful_retcode(solution.retcode)
-    @test solution.boundarygap ≤ 1e-6
-    @test first(solution.t) == 0
-    @test last(solution.t) == solution.stoppingtime
-    @test first(solution.a) ≈ testfirm.a₀ atol = 1e-6
-    @test last(solution.a) ≈ testfirm.η atol = 1e-6
-    @test last(solution.q) ≈ c(testfirm) atol = 1e-6
-    @test abs(first(solution.λq)) ≤ 1e-6
-    path = CommittedTaxPath(solution)
-    @test path(solution.stoppingtime; side = :left) ≈ model.climate.γ * testfirm.A^2 / testhousehold.ν
-    @test path(solution.stoppingtime) ≈ committedsupportingtax(model)
-    @test path(solution.stoppingtime + 100) ≈ committedsupportingtax(model)
-    @test isfinite(solution.welfarecost)
-    @test committedsolutionfilename(model; intervals = 100) != committedsolutionfilename(model; intervals = 200)
+    for household in (testhousehold, Household(; ν = 0.8, ϕ = 2.0, r = 0.1))
+        model = Model(household, testfirm, Climate(; γ = 0.2))
+        solution = solvecommitted(model; verbose = 0)
+        @test SciMLBase.successful_retcode(solution.retcode)
+        @test solution.boundarygap ≤ 1e-6
+        @test first(solution.t) == 0
+        @test last(solution.t) == solution.stoppingtime
+        @test first(solution.a) ≈ testfirm.a₀ atol = 1e-6
+        @test last(solution.a) ≈ testfirm.η atol = 1e-6
+        @test last(solution.q) ≈ c(testfirm) atol = 1e-6
+        @test abs(first(solution.λq)) ≤ 1e-6
+        path = CommittedTaxPath(solution)
+        @test path(solution.stoppingtime; side = :left) ≈ model.climate.γ * y(n(0, testfirm.η, household, testfirm), testfirm)
+        @test path(solution.stoppingtime) ≈ committedsupportingtax(model)
+        @test path(solution.stoppingtime + 100) ≈ committedsupportingtax(model)
+        @test isfinite(solution.welfarecost)
+        @test committedsolutionfilename(model; intervals = 100) != committedsolutionfilename(model; intervals = 200)
+    end
 end

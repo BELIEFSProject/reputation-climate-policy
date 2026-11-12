@@ -14,8 +14,11 @@ struct NonCommittedDAEParameters{M, G, S, C, D, T}
     maxiters::Int
 end
 
-function NonCommittedDAEParameters(τᶜ::CommittedTaxPath, model::LinearLabourModel, government::Government, signal::Signal; h = 1 / 40, timestep = 1.0, horizon = last(τᶜ.ts), tolerance = 1e-8, policytolerance = 1e-7, maxiters = 1000)
+function NonCommittedDAEParameters(τᶜ::CommittedTaxPath, model::AbstractModel, government::Government, signal::Signal; h = 1 / 40, timestep = 1.0, horizon = last(τᶜ.ts), tolerance = 1e-8, policytolerance = 1e-7, maxiters = 1000)
     household, firm = model.household, model.firm
+    if household isa Household && household.ϕ != 2
+        throw(ArgumentError("The non-committed solver supports inverse Frisch elasticities 1 and 2."))
+    end
     if !all(x -> isfinite(x) && x > 0, (horizon, timestep, tolerance, policytolerance, household.r, household.ν, firm.A, firm.ξ, signal.σ)) || maxiters < 1
         throw(ArgumentError("The horizon, tolerances, discount, labour scale, productivity, adjustment cost and noise must be positive."))
     end
@@ -24,7 +27,7 @@ function NonCommittedDAEParameters(τᶜ::CommittedTaxPath, model::LinearLabourM
     end
 
     grid = NonCommittedMarkovGrid(model, h)
-    output = firm.A^2 / household.ν
+    output = household isa LinearHousehold ? firm.A^2 / household.ν : y(n(0, firm.a₀, household, firm), firm)
     maxtax = max(maximum(τᶜ.taxpath), τᶜ.tailtax)
     qscale = max(1, c(firm), output * maxtax / household.r)
     valuescale = max(1, output / household.r)
@@ -59,36 +62,78 @@ function noncommitteddaegenerator(x, component, i, j, λₐ, λ⁺, λ⁻)
     return value
 end
 
-"Hidden best response or largest consistent tax; zero tax is selected at capacity."
+"Hidden best response, or largest consistent tax for projection; zero tax is selected at capacity."
 function noncommitteddaetax(x, τ, i, j, τᶜ, parameters; equilibrium = false)
     model, grid = parameters.model, parameters.grid
     household, firm, climate = model.household, model.firm, model.climate
     φ, a = physicalstate(grid, i, j)
-    linear = κ₁(a, household, firm, climate)
-    curvature = κ₂(a, household, firm, climate)
-    if iszero(τᶜ) || iszero(curvature)
-        return 0, 0
+    if iszero(τᶜ) || a ≥ firm.η
+        return zero(τ), zero(τ)
     end
 
-    B = φ * (1 - φ) * (parameters.signal.ϵ / parameters.signal.σ)^2 * (τᶜ - τ)
+    coefficient = φ * (1 - φ) * (parameters.signal.ϵ / parameters.signal.σ)^2
+    B = coefficient * (τᶜ - τ)
     slope = zero(τ)
     if 1 < i < size(grid, 1)
         Δφ = grid.h * span(grid.φ)
         slope = parameters.valuescale * (x[2, i + 1, j] - x[2, i - 1, j]) / (2Δφ)
     end
 
-    candidate = clamp(-(linear + B * slope) / curvature, 0, τᶜ)
-    if equilibrium
-        uppergradient = linear + curvature * τᶜ
-        if uppergradient ≤ 0
+    if household isa LinearHousehold
+        linear = κ₁(a, household, firm, climate)
+        curvature = κ₂(a, household, firm, climate)
+        candidate = clamp(-(linear + B * slope) / curvature, 0, τᶜ)
+        if equilibrium
+            uppergradient = linear + curvature * τᶜ
+            if uppergradient ≤ 0
+                candidate = τᶜ
+            else
+                lowergradient = linear + coefficient * τᶜ * slope
+                gain = max(-lowergradient, 0)
+                candidate = τᶜ * gain / (uppergradient + gain)
+            end
+        end
+        improvement = max((τ - candidate) * (linear + B * slope + curvature * (τ + candidate) / 2), 0)
+        return candidate, improvement
+    end
+
+    gap = firm.η - a
+    output = y(n(0, a, household, firm), firm)
+    target = 2climate.γ * output - 2B * slope / (gap^2 * output)
+    candidate = target ≤ 0 ? zero(target) : clamp(2target / (sqrt((gap * target)^2 + 4) + gap * target), 0, τᶜ)
+
+    if equilibrium && !iszero(coefficient)
+        gradient(tax) = ∂ₜsimplifiedcost(tax, a, household, firm, climate) + coefficient * slope * (τᶜ - tax)
+        curvature(tax) = ∂ₜₜsimplifiedcost(tax, a, household, firm, climate) - coefficient * slope
+        upper = float(FD.value(τᶜ))
+        if gap * upper == 1
+            upper = prevfloat(upper)
+        end
+        lower = zero(upper)
+        if FD.value(gradient(upper)) ≤ 0
             candidate = τᶜ
         else
-            lowergradient = linear + φ * (1 - φ) * (parameters.signal.ϵ / parameters.signal.σ)^2 * τᶜ * slope
-            gain = max(-lowergradient, 0)
-            candidate = τᶜ * gain / (uppergradient + gain)
+            # At ϕ=2 the consistent gradient is convex; bracket its largest root.
+            if FD.value(gradient(lower)) ≥ 0 && FD.value(curvature(lower)) < 0 && FD.value(curvature(upper)) > 0
+                lower = Roots.find_zero(tax -> FD.value(curvature(tax)), (lower, upper), Roots.Brent())
+            end
+            if FD.value(gradient(lower)) < 0
+                candidate = Roots.find_zero(tax -> FD.value(gradient(tax)), (lower, upper), Roots.Brent())
+                # Restore implicit control derivatives when a projection is differentiated.
+                for _ in 1:2
+                    candidate -= gradient(candidate) / curvature(candidate)
+                end
+                candidate = clamp(candidate, 0, τᶜ)
+            else
+                candidate = zero(τ)
+            end
         end
     end
-    improvement = max((τ - candidate) * (linear + B * slope + curvature * (τ + candidate) / 2), 0)
+
+    wage, candidatewage = sqrt(max(1 - gap * τ, 0)), sqrt(max(1 - gap * candidate, 0))
+    wagedifference = τ == candidate ? zero(τ + candidate) : gap * (candidate - τ) / (wage + candidatewage)
+    flowdifference = output * wagedifference * ((wage^2 + wage * candidatewage + candidatewage^2) / 3 - 1 + climate.γ * gap * output * (wage + candidatewage))
+    improvement = max(flowdifference + B * slope * (τ - candidate), 0)
     return candidate, improvement
 end
 
@@ -122,7 +167,8 @@ function noncommitteddaefield!(field, state, parameters, s; interval = nothing)
             f[2, i, j] = noncommitteddaegenerator(x, 2, i, j, λₐ, λ⁺, λ⁻) + simplifiedcost(τ, a, investment, household, firm, climate) / parameters.valuescale - household.r * x[2, i, j]
             f[3, i, j] = noncommitteddaegenerator(x, 3, i, j, λₐ, λ⁺, λ⁻) + simplifiedcost(τᵉ, a, investment, household, firm, climate) / parameters.valuescale - household.r * x[3, i, j]
         end
-        candidate, _ = noncommitteddaetax(x, τ, i, j, τᶜ, parameters; equilibrium = true)
+        # The nonlinear tax is already an algebraic state: enforce its exact best-response fixed point.
+        candidate, _ = noncommitteddaetax(x, τ, i, j, τᶜ, parameters; equilibrium = household isa LinearHousehold)
         f[4, i, j] = x[4, i, j] - candidate / parameters.taxscale
     end
     return nothing
@@ -244,7 +290,7 @@ function noncommitteddaediagnostics(state, derivative, parameters, s; interval =
 end
 
 "Solve the Markov equilibrium by fully implicit time steps, retaining tax and capacity as algebraic constraints."
-function solvenoncommitteddae(τᶜ::CommittedTaxPath, model::LinearLabourModel, government::Government, signal::Signal; h = 1 / 40, timestep = 1.0, savestep = timestep, horizon = last(τᶜ.ts), tolerance = 1e-8, policytolerance = 1e-7, maxiters = 1000, verbose = 1)
+function solvenoncommitteddae(τᶜ::CommittedTaxPath, model::AbstractModel, government::Government, signal::Signal; h = 1 / 40, timestep = 1.0, savestep = timestep, horizon = last(τᶜ.ts), tolerance = 1e-8, policytolerance = 1e-7, maxiters = 1000, verbose = 1)
     if !isfinite(savestep) || savestep ≤ 0
         throw(ArgumentError("The output step must be finite and positive."))
     end
@@ -252,6 +298,9 @@ function solvenoncommitteddae(τᶜ::CommittedTaxPath, model::LinearLabourModel,
     prototype = noncommitteddaejacobian(parameters)
     autodiff = ADTypes.AutoSparse(ADTypes.AutoForwardDiff(); sparsity_detector = ADTypes.KnownJacobianSparsityDetector(prototype), coloring_algorithm = SMC.GreedyColoringAlgorithm())
     state = noncommitteddaestate(noncommittedinitial(parameters.horizon, τᶜ.tailtax, parameters), parameters)
+    if model.household isa Household
+        noncommitteddaeprojecttax!(state, parameters, 0)
+    end
     stationaryderivative = zeros(eltype(state), length(state))
     stationary! = (residual, x, parameters) -> noncommitteddaeresidual!(residual, stationaryderivative, x, parameters, 0)
     
