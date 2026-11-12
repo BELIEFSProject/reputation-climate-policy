@@ -98,6 +98,7 @@ horizonfigure = CairoMakie.with_theme(slidetheme) do
 
     CairoMakie.Colorbar(figure[1, 2]; colormap = horizoncolormap, limits = (1, maxhorizon), label = L"Time to maturity $h$ [days]", labelsize = 16, ticklabelsize = 14, ticks = CairoMakie.LinearTicks(5), width = 10, spinewidth = 0)
     CairoMakie.xlims!(axis, 0, Dates.value(lastedate - firstdate))
+
     figure
 end
 
@@ -123,6 +124,10 @@ locallevelfigure = CairoMakie.with_theme(slidetheme) do
 
     CairoMakie.Colorbar(figure[1, 2]; colormap = horizoncolormap, limits = (1, maxhorizon), label = L"Time to maturity $h$ [days]", labelsize = 16, ticklabelsize = 14, ticks = CairoMakie.LinearTicks(5), width = 10, spinewidth = 0)
     CairoMakie.xlims!(noiseaxis, 0, Dates.value(lastedate - firstdate))
+
+    maxnoise = maximum(abs, filter(!isnan, locallevelfit.noise))
+    CairoMakie.ylims!(noiseaxis, -maxnoise, maxnoise)
+
     figure
 end
 
