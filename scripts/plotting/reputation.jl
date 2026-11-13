@@ -41,7 +41,7 @@ CairoMakie.set_theme!(publicationtheme)
 CairoMakie.update_theme!(backgroundcolor = background, Axis = (; backgroundcolor = background), Legend = (; backgroundcolor = background))
 
 figuresize = (960, 540)
-φ₀ = 0.5
+φ₀ = 0.9
 oddsratio = 0.1
 Δt = 0.25
 nearzeroshare = 0.95

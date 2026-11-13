@@ -46,7 +46,7 @@ CairoMakie.set_theme!(publicationtheme)
 CairoMakie.update_theme!(backgroundcolor = background, Axis = (; backgroundcolor = background), Legend = (; backgroundcolor = background))
 
 figuresize = (960, 540)
-φ₀ = 0.8
+φ₀ = 0.9
 Δt = 0.25
 characteristicstep = 0.05
 characteristictolerance = 1e-8

@@ -5,6 +5,8 @@ using Revise
 import DotEnv
 import JLD2
 import Printf
+import UnPack: @unpack
+import FastClosures: @closure
 import Colors
 import CairoMakie
 import SciMLBase
@@ -28,6 +30,7 @@ includet("../../src/agents/government.jl")
 
 includet("../../src/dynamics/government.jl")
 includet("../../src/solve/model.jl")
+includet("../../src/solve/government/committed.jl")
 includet("../../src/solve/government/noncommittedmarkov.jl")
 includet("../../src/solve/government/noncommitteddae.jl")
 includet("../../src/utils/arguments.jl")
@@ -40,14 +43,13 @@ includet("reputationutils.jl")
 
 ## Configuration
 
-φ₀ = 0.5
-npaths = 500
+φ₀ = 0.9
+npaths = 10_000
 seed = 2026
 Δt = 0.01
 saveinterval = 0.25
 interval = (0.1, 0.9)
 samplepaths = 6
-committed = false
 
 background = Colors.colorant"#FAFAFA"
 figuresize = (960, 540)
@@ -107,10 +109,31 @@ ts = [t for t in times for _ in 1:(t in jumps ? 2 : 1)]
 priors = (fill(φ₀, npaths), clamp.(rand(Random.Xoshiro(seed), npaths), eps(), 1 - eps()))
 cases = ("fixed", "uniform")
 
+## Ramsey benchmark
+
+benchmark = loadreputationbenchmark(baseline, joinpath(datapath, "solutions"))
+benchmarkvalues = zeros(eltype(ts), length(ts), 10)
+for (row, t) in enumerate(ts)
+    if t < benchmark.stoppingtime
+        index = min(searchsortedlast(benchmark.t, t), length(benchmark.t) - 1)
+        weight = (t - benchmark.t[index]) / (benchmark.t[index + 1] - benchmark.t[index])
+        a = clamp((1 - weight) * benchmark.a[index] + weight * benchmark.a[index + 1], firm.a₀, firm.η)
+        q = (1 - weight) * benchmark.q[index] + weight * benchmark.q[index + 1]
+    else
+        a, q = firm.η, c(firm)
+    end
+    side = row < length(ts) && ts[row + 1] == t ? :left : :right
+    τ = τᶜ(t; side)
+    labour = n(τ, a, household, firm)
+    emissions = e(labour, a, firm)
+    cumulative = row == 1 ? 0 : benchmarkvalues[row - 1, 10] + (t - ts[row - 1]) * (benchmarkvalues[row - 1, 9] + emissions) / 2
+    benchmarkvalues[row, :] .= (1, τ, τ, a, q, a ≥ firm.η ? 0 : α(q, firm), labour, y(labour, firm), emissions, cumulative)
+end
+
 ## Simulate the physical belief diffusion
 
 # The cache identity includes every source equilibrium and simulation setting.
-cachelabel = join(("physical-belief-sde-v1", join(ncsolutionkey.(getproperty.(matches, :solution)), ","), string(φ₀), string(npaths), string(seed), string(Δt), string(saveinterval), string(committed)), "|")
+cachelabel = join(("physical-belief-sde-v3-ramsey", join(ncsolutionkey.(getproperty.(matches, :solution)), ","), string(φ₀), string(npaths), string(seed), string(Δt), string(saveinterval)), "|")
 key = bytes2hex(SHA.sha256(cachelabel))
 tag = first(key, solutionhashlength)
 cachepath = joinpath(datapath, "simulations", "dynamic-$tag.jld2")
@@ -128,14 +151,14 @@ if isfile(cachepath)
 else
     paths = [[begin
         @info "Simulating stochastic transitions" case = cases[case] noise = σs[k] trajectories = npaths
-        simulatedynamics(equilibrium, priors[case], ts; timestep = Δt, seed, committed)
+        simulatedynamics(equilibrium, priors[case], ts; timestep = Δt, seed, committed = false)
     end for (k, equilibrium) in enumerate(matches)] for case in eachindex(cases)]
 
     JLD2.jldopen(cachepath, "w") do file
         file["dynamics/key"] = key
         file["dynamics/t"] = ts
         file["dynamics/noise"] = σs
-        file["dynamics/committed"] = committed
+        file["dynamics/committed"] = false
         file["dynamics/seed"] = seed
         file["dynamics/timestep"] = Δt
         file["dynamics/sources"] = getproperty.(matches, :filename)
@@ -170,7 +193,7 @@ for (case, name) in enumerate(cases)
     directory = figurepaths[case]
     mkpath(directory)
     open(joinpath(directory, "summary.csv"), "w") do file
-        println(file, "case,noise,time,variable,lower,median,upper")
+        println(file, "case,government,noise,time,variable,lower,median,upper")
         for panel in eachindex(columns)
             figure = CairoMakie.Figure(size = figuresize, backgroundcolor = background)
             axis = CairoMakie.Axis(figure[1, 1]; xlabel = "Years since announcement", ylabel = labels[panel], title = titles[panel], limits = ((0, horizon), (0, nothing)))
@@ -181,21 +204,27 @@ for (case, name) in enumerate(cases)
                 CairoMakie.ylims!(axis, 0, 1.02)
             end
 
+            committedvalues = benchmarkvalues[:, columns[panel]] ./ scales[panel]
+            CairoMakie.lines!(axis, ts, committedvalues; color = defaultpalette[:guide], linestyle = :dash, linewidth = publicationdefault(:medianlinewidth), label = "Committed")
+            for row in eachindex(ts)
+                println(file, join((name, "Committed", NaN, ts[row], filenames[panel], committedvalues[row], committedvalues[row], committedvalues[row]), ","))
+            end
+
             for k in eachindex(matches)
                 values = paths[case][k][:, columns[panel], :] ./ scales[panel]
                 quantiles = reduce(hcat, [Statistics.quantile(view(values, row, :), [interval[1], 0.5, interval[2]]) for row in axes(values, 1)])
                 lower, median, upper = eachrow(quantiles)
                 CairoMakie.band!(axis, ts, lower, upper; color = (colours[k], publicationdefault(:intervalopacity)))
                 for trajectory in 1:min(samplepaths, npaths)
-                    CairoMakie.lines!(axis, ts, values[:, trajectory]; color = (colours[k], publicationdefault(:samplepathopacity)), linewidth = publicationdefault(:samplepathlinewidth))
+                    CairoMakie.lines!(axis, ts, values[:, trajectory]; color = (colours[k], publicationdefault(:samplepathopacity)), linewidth = publicationdefault(:samplepathlinewidth), linestyle = :solid)
                 end
-                CairoMakie.lines!(axis, ts, median; color = colours[k], linewidth = publicationdefault(:medianlinewidth), label = Printf.@sprintf("σ = %.2f", σs[k]))
+                CairoMakie.lines!(axis, ts, median; color = colours[k], linewidth = publicationdefault(:medianlinewidth), linestyle = :solid, label = Printf.@sprintf("Non-committed, σ = %.2f", σs[k]))
                 for row in eachindex(ts)
-                    println(file, join((name, σs[k], ts[row], filenames[panel], lower[row], median[row], upper[row]), ","))
+                    println(file, join((name, "Non-committed", σs[k], ts[row], filenames[panel], lower[row], median[row], upper[row]), ","))
                 end
             end
 
-            CairoMakie.Legend(figure[2, 1], axis; orientation = :horizontal, tellwidth = false)
+            CairoMakie.Legend(figure[2, 1], axis; orientation = :horizontal, nbanks = 2, tellwidth = false)
             savepublicationfigure(joinpath(directory, filenames[panel]), figure)
         end
     end
