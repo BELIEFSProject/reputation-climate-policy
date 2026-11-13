@@ -31,13 +31,11 @@ function dynamicvalues(u, t, p::MarkovDynamics; side = t == p.stop ? :left : :ri
     @inbounds for dj in 0:1, di in 0:1
         weight = (di == 0 ? 1 - wφ : wφ) * (dj == 0 ? 1 - wa : wa)
         q += weight * ((1 - w) * left.q[i + di, j + dj] + w * right.q[i + di, j + dj])
-        # Extend the last interior tax to the capacity boundary; its zero-rate convention applies only at a=η.
-        column = min(j + dj, size(grid, 2) - 1)
-        fraction += weight * ((1 - wτ) * p.fractions[k][i + di, column] + wτ * p.fractions[k + 1][i + di, column])
+        fraction += weight * ((1 - wτ) * p.fractions[k][i + di, j + dj] + wτ * p.fractions[k + 1][i + di, j + dj])
     end
 
-    τⁿᶜ = a ≥ firm.η ? 0 : τᶜ * clamp(fraction, 0, 1)
-    τᵉ = noncommittedexpectedtax(φ, τⁿᶜ, τᶜ)
+    τⁿᶜ = a ≥ firm.η ? clamp(parameters.government.τ̄, 0, τᶜ) : τᶜ * clamp(fraction, 0, 1)
+    τᵉ = ncexpectedtax(φ, τⁿᶜ, τᶜ)
     τ = p.committed ? τᶜ : τⁿᶜ
     investment = a ≥ firm.η ? 0 : α(q, firm)
     labour = n(τᵉ, a, household, firm)

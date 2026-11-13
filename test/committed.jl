@@ -28,18 +28,27 @@ testproblem = committedproblem(testmodel)
     @test size(testproblem.singular_term) == (5, 5)
     @test testproblem.singular_term[4, :] == [0, 0, 1, -1, 0]
     @test count(!iszero, testproblem.singular_term) == 2
-    left = testproblem.u0(testmodel, 0.0)
-    right = testproblem.u0(testmodel, 1.0)
+    left, right = first(testproblem.u0), last(testproblem.u0)
     @test testproblem.singular_term * left ≈ zeros(5)
     residual = zeros(5)
-    committedboundary!(residual, [left, right], testmodel, [0.0, 1.0])
+    testproblem.f.bc(residual, [left, right], testmodel, [0.0, 1.0])
     @test maximum(abs, residual) < 1e-12
+end
+
+@testset "Solver cache retains the singular costate term" begin
+    for household in (testhousehold, Household(; ν = 0.8, ϕ = 2.0, r = 0.1))
+        problem = committedproblem(Model(household, testfirm, testmodel.climate); intervals = 20)
+        @test problem.u0 isa Vector{<:AbstractVector}
+        cache = BVP.init(problem, BVP.MIRK4(); dt = 1/20, adaptive = false)
+        @test cache.singular_term == problem.singular_term
+        @test cache.prob.singular_term == problem.singular_term
+    end
 end
 
 @testset "Inherited initial policy" begin
     initialtax = 0.01
     problem = committedproblem(testmodel; initialtax)
-    states = [problem.u0(testmodel, s) for s in (0.0, 1.0)]
+    states = [first(problem.u0), last(problem.u0)]
     residual = zeros(5)
     problem.f.bc(residual, states, testmodel, [0.0, 1.0])
     @test maximum(abs, residual) < 1e-12
@@ -60,13 +69,12 @@ end
 end
 
 @testset "Boundary callbacks preserve Dual-valued endpoint vectors" begin
-    left = testproblem.u0(testmodel, 0.0)
-    right = testproblem.u0(testmodel, 1.0)
+    left, right = first(testproblem.u0), last(testproblem.u0)
     boundary = function (z)
         points = [view(z, 1:5), view(z, 6:10)]
         states = BVP.BoundaryValueDiffEqCore.EvalSol(points, [0.0, 1.0], nothing)
         residual = similar(z, 5)
-        committedboundary!(residual, states, testmodel, states.t)
+        testproblem.f.bc(residual, states, testmodel, states.t)
         return residual
     end
     endpoints = vcat(left, right)
@@ -81,7 +89,7 @@ end
             committeddrift!(dx, x, testmodel, s)
             return dx
         end
-        @test all(isfinite, FD.jacobian(field, testproblem.u0(testmodel, s)))
+        @test all(isfinite, FD.jacobian(field, initialcommittedguess(testmodel, s, 0)))
     end
 end
 
@@ -143,7 +151,7 @@ end
 
     initialtax = 0.02
     problem = committedproblem(model; initialtax)
-    initial = problem.u0(model, 1.0)
+    initial = last(problem.u0)
     output = y(n(0, testfirm.η, household, testfirm), testfirm)
     λscale = model.climate.γ * output * (testfirm.η - testfirm.a₀)^2
     @test committedtax(testfirm.a₀, λscale * initial[4], model) ≈ initialtax
@@ -162,6 +170,10 @@ end
         @test last(solution.a) ≈ testfirm.η atol = 1e-6
         @test last(solution.q) ≈ c(testfirm) atol = 1e-6
         @test abs(first(solution.λq)) ≤ 1e-6
+        @test maximum(abs, solution.λq) > 1e-6
+        @test minimum(solution.investment) ≥ -1e-7
+        costateerror = [(solution.λq[k + 1] - solution.λq[k - 1]) / (solution.t[k + 1] - solution.t[k - 1]) + (solution.q[k] + solution.λₐ[k]) / testfirm.ξ for k in 3:(length(solution.t) - 2)]
+        @test maximum(abs, costateerror) < 5e-4
         path = CommittedTaxPath(solution)
         @test path(solution.stoppingtime; side = :left) ≈ model.climate.γ * y(n(0, testfirm.η, household, testfirm), testfirm)
         @test path(solution.stoppingtime) ≈ committedsupportingtax(model)

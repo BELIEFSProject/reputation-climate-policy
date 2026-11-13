@@ -1,3 +1,5 @@
+import ADTypes
+
 struct CommittedBVPSolution{M, I, V, T, R}
     model::M
     initialtax::I
@@ -144,7 +146,7 @@ function initialshadowcost(τ₀, model)
     return λinitial / λscale
 end
 
-function committedproblem(model::AbstractModel; initialtax = nothing)
+function committedproblem(model::AbstractModel; initialtax = nothing, intervals = 100)
     if inversefrisch(model.household) ∉ (1, 2)
         throw(ArgumentError("The committed solver supports inverse Frisch elasticities 1 and 2."))
         # FIXME: Make a specialised solver for a model type with φ = 2, similar to the linear one.
@@ -153,7 +155,8 @@ function committedproblem(model::AbstractModel; initialtax = nothing)
     initialshadow = isnothing(initialtax) ? 0 : initialshadowcost(initialtax, model)
 
     boundary! = @closure (residual, states, model, mesh) -> committedboundary!(residual, states, model, mesh, initialshadow)
-    guess = @closure (model, s) -> initialcommittedguess(model, s, initialshadow)
+    # Materialise the same path: remaking a function-valued guess drops singular_term in SciMLBase.
+    guess = [initialcommittedguess(model, s, initialshadow) for s in range(0, 1; length = intervals + 1)]
 
     singular_term = zeros(5, 5)
     singular_term[4, 3] = 1
@@ -185,15 +188,21 @@ end
 "Solve the full-interval committed BVP; initialtax anchors an inherited plan instead of imposing λq(0)=0."
 function solvecommitted(model::AbstractModel; initialtax = nothing, intervals = 100, verbose = 1)
     @unpack household, firm, climate = model
-    problem = committedproblem(model; initialtax)
+    problem = committedproblem(model; initialtax, intervals)
 
     if verbose > 0
         @info "Solving committed BVP" intervals initialtax
     end
 
-    solution = BVP.solve(problem, BVP.MIRK4(); dt = inv(intervals), adaptive = false, verbose = verbose > 1)
+    # Finite differences handle the tax-rule switches in the restored costate system.
+    algorithm = BVP.MIRK4(; jac_alg = BVP.BVPJacobianAlgorithm(ADTypes.AutoFiniteDiff()))
+    cache = BVP.init(problem, algorithm; dt = inv(intervals), adaptive = false, verbose = verbose > 1)
+    if cache.singular_term != problem.singular_term
+        error("Committed BVP initialisation discarded the singular costate term.")
+    end
+    solution = BVP.solve!(cache)
     if !SciMLBase.successful_retcode(solution)
-        @warn "Committed BVP failed with return code $(solution.retcode)."
+        error("Committed BVP failed with return code $(solution.retcode).")
     end
 
     ascale = firm.η - firm.a₀

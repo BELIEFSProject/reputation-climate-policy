@@ -64,6 +64,16 @@ function parameterargumentsettings()
             dest_name = "γ"
             default = nothing
             help = "Damage coefficient."
+        "--preferred-tax"
+            arg_type = Float64
+            dest_name = "τ̄"
+            default = nothing
+            help = "Behaviourally preferred tax in USD/tCO2e."
+        "--behavioural-curvature", "--kappa-b"
+            arg_type = Float64
+            dest_name = "κᵇ"
+            default = nothing
+            help = "Behavioural curvature in model tax and annual cost units."
     end
 
     return settings
@@ -87,14 +97,18 @@ function parameterkwargs(parsed, fields)
     return kwargs
 end
 
-function initmodels(args = ARGS)
-    parsed = parseparameterarguments(args)
-    
+initmodels(args = ARGS) = initmodels(parseparameterarguments(args))
+
+function initmodels(parsed::AbstractDict)
     firmkwargs = parameterkwargs(parsed, (:e₀, :a₀, :A, :η, :κ, :ξ))
     firm = Firm(; firmkwargs...)
     householdkwargs = parameterkwargs(parsed, (:ν, :ϕ, :r))
     household = Household(; householdkwargs...)
-    government = Government()
+    governmentkwargs = parameterkwargs(parsed, (:κᵇ, :τ̄))
+    if haskey(governmentkwargs, :τ̄)
+        governmentkwargs[:τ̄] *= taxfactor
+    end
+    government = Government(; governmentkwargs...)
 
     signal = Signal(; parameterkwargs(parsed, (:ϵ, :σ))...)
     climate = Climate(; parameterkwargs(parsed, (:γ, ))...)

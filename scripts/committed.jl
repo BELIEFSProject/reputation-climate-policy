@@ -31,7 +31,7 @@ household, firm, government, signal, climate = initmodels()
 model = Model(household, firm, climate)
 
 ## Solve
-τ₀ = nothing # 90 * taxfactor
+τ₀ = 10 * taxfactor
 intervals = 500
 filename = committedsolutionfilename(model; initialtax = τ₀, intervals)
 filepath = joinpath(@__DIR__, "..", "data", "solutions", filename)

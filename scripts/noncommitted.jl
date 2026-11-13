@@ -3,6 +3,7 @@ using Revise
 
 import Printf
 import JLD2
+import ArgParse
 
 import DifferentiationInterface as DI
 import ForwardDiff as FD
@@ -30,12 +31,27 @@ includet("../src/solve/government/noncommitteddae.jl")
 includet("../src/utils/arguments.jl")
 includet("../src/utils/saving.jl")
 
+## Arguments
+argumentsettings = parameterargumentsettings()
+ArgParse.@add_arg_table! argumentsettings begin
+    "--h"
+        arg_type = Float64
+        default = 1 / 80
+        help = "Shared normalised grid step in beliefs and abatement; must divide [0,1]."
+    "--timestep"
+        arg_type = Float64
+        default = 0.05
+        help = "Maximum backward implicit time step in calendar years."
+end
+arguments = ArgParse.parse_args(ARGS, argumentsettings; as_symbols = true)
+
 ## Model
-household, firm, government, signal, climate = initmodels()
+household, firm, government, signal, climate = initmodels(arguments)
 model = Model(household, firm, climate)
+@info "Non-committed preferences" preferredtaxUSD = government.τ̄ / taxfactor curvature = government.κᵇ
 
 ## Announced policy
-committedinitialtax = nothing # Set an inherited tax to anchor the committed announcement.
+committedinitialtax = 10 * taxfactor # Set an inherited tax to anchor the committed announcement.
 committedintervals = 500
 committedfile = joinpath(@__DIR__, "..", "data", "solutions", committedsolutionfilename(model; initialtax = committedinitialtax, intervals = committedintervals))
 if !isfile(committedfile)
@@ -48,38 +64,41 @@ end
 
 ## Solve
 # h is shared by both normalised states; announcement knots further split the implicit time steps.
-h = 1 / 80
-timestep = 0.05
+h = arguments[:h]
+timestep = arguments[:timestep]
 savestep = 1.0 # Calendar years between saved values; independent of the internal time step.
 horizon = last(τᶜ.ts) # The stationary tail is solved at this date.
+tolerance = 1e-6
+policytolerance = 1e-6
 
-noncommittedsolution = solvenoncommitteddae(τᶜ, model, government, signal; h, timestep, savestep, horizon, verbose = 1);
+ncsolution = solvencdae(τᶜ, model, government, signal; h, timestep, savestep, horizon, tolerance, policytolerance, verbose = 1);
 
 ## Diagnostics
-noncommittedinitialvalues = first(noncommittedsolution.u)
-noncommittedvaluegap = maximum(x -> x.valuegap, noncommittedsolution.diagnostics)
-noncommittedbellmangap = maximum(x -> x.bellmangap, noncommittedsolution.diagnostics)
-noncommittedpolicygap = maximum(x -> x.policygap, noncommittedsolution.diagnostics)
-noncommittedmaximumimprovement = maximum(x -> x.policyimprovement, noncommittedsolution.diagnostics)
-noncommittedtaxrange = extrema(noncommittedinitialvalues.τ) ./ taxfactor
-noncommittedvaluationrange = extrema(noncommittedinitialvalues.q)
+ncinitialvalues = first(ncsolution.u)
+ncvaluegap = maximum(x -> x.valuegap, ncsolution.diagnostics)
+ncbellmangap = maximum(x -> x.bellmangap, ncsolution.diagnostics)
+ncpolicygap = maximum(x -> x.policygap, ncsolution.diagnostics)
+ncmaximumimprovement = maximum(x -> x.policyimprovement, ncsolution.diagnostics)
+nctaxrange = extrema(ncinitialvalues.τ) ./ taxfactor
+ncvaluationrange = extrema(ncinitialvalues.q)
 
-Printf.@printf("Initial tax [%.3f, %.3f] USD/tCO₂; expected investment value [%.6g, %.6g]\n", first(noncommittedtaxrange), last(noncommittedtaxrange), first(noncommittedvaluationrange), last(noncommittedvaluationrange))
-Printf.@printf("Maximum value, Bellman and policy residuals: %.3e, %.3e, %.3e\n", noncommittedvaluegap, noncommittedbellmangap, noncommittedpolicygap)
-Printf.@printf("Maximum hidden-deviation improvement: %.3e output/year\n", noncommittedmaximumimprovement)
+Printf.@printf("Initial tax [%.3f, %.3f] USD/tCO₂; expected investment value [%.6g, %.6g]\n", first(nctaxrange), last(nctaxrange), first(ncvaluationrange), last(ncvaluationrange))
+Printf.@printf("Maximum value, Bellman and policy residuals: %.3e, %.3e, %.3e\n", ncvaluegap, ncbellmangap, ncpolicygap)
+Printf.@printf("Maximum hidden-deviation improvement: %.3e trillion USD-equivalent/year\n", ncmaximumimprovement)
 
 ## Save
-noncommittedkey = noncommittedsolutionkey(noncommittedsolution)
-noncommittedfile = joinpath(@__DIR__, "..", "data", "solutions", "noncommitted-simplified-$(first(last(split(noncommittedkey, '/')), solutionhashlength)).jld2")
-if isfile(noncommittedfile)
-    error("Non-committed result already exists at $noncommittedfile; preserving the saved solution.")
+nckey = ncsolutionkey(ncsolution)
+ncfile = joinpath(@__DIR__, "..", "data", "solutions", "noncommitted-simplified-$(first(last(split(nckey, '/')), solutionhashlength)).jld2")
+if isfile(ncfile)
+    error("Non-committed result already exists at $ncfile; preserving the saved solution.")
 end
-mkpath(dirname(noncommittedfile))
-JLD2.jldopen(noncommittedfile, "w") do file
+mkpath(dirname(ncfile))
+JLD2.jldopen(ncfile, "w") do file
+    file["ncversion"] = ncversion
     file["model"] = model
     file["committedtaxpath"] = τᶜ
-    file["$noncommittedkey/solution"] = noncommittedsolution
-    file["$noncommittedkey/government"] = government
-    file["$noncommittedkey/signal"] = signal
+    file["$nckey/solution"] = ncsolution
+    file["$nckey/government"] = government
+    file["$nckey/signal"] = signal
 end
-@info "Saved non-committed equilibrium" noncommittedfile noncommittedkey
+@info "Saved non-committed equilibrium" ncfile nckey

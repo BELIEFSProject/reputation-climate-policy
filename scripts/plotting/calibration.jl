@@ -24,21 +24,20 @@ includet("publication.jl")
 includet("colours.jl")
 
 ## Configuration
-
 background = Colors.colorant"#FAFAFA"
 figuresize = (960, 540)
 CairoMakie.set_theme!(publicationtheme)
 CairoMakie.update_theme!(backgroundcolor = background, Axis = (; backgroundcolor = background), Legend = (; backgroundcolor = background))
 
-referencehorizon = 24. # Illustrative constant-rate completion, not the Ramsey stopping time.
+referencehorizon = defaultadjustmenthorizon # Constant-rate calibration reference, not the Ramsey stopping time.
 τmax = 250. # USD/tCO₂e.
 
 rootdirectory = normpath(joinpath(@__DIR__, "..", ".."))
 plotpath = get(ENV, "PLOTPATH", joinpath(rootdirectory, "figures"))
 
 household, firm, government, signal, climate = initmodels()
-label = join(("calibration-v1", solutionlabel(household, firm, signal, climate), parameterstring(referencehorizon), parameterstring(τmax)), "_")
-figurepath = joinpath(plotpath, "calibration-$(first(bytes2hex(SHA.sha256(label)), solutionhashlength))")
+label = join(("calibration-v2", solutionlabel(household, firm, signal, climate), governmentlabel(government), parameterstring(referencehorizon), parameterstring(τmax)), "_")
+figurepath = publicationfigurepath(plotpath, household, firm, climate, "primitives", label)
 mkpath(figurepath)
 
 n₀ = n(0, firm.a₀, household, firm)
@@ -56,10 +55,12 @@ titles = ("Labour response to carbon policy", "Emissions and installed abatement
 xlabels = ("Carbon tax [USD/tCO₂e]", "Installed abatement / capacity", "Carbon tax [USD/tCO₂e]", "Installed abatement / capacity", "Capacity installed per year", L"Investment valuation $q/c$", "Tax gap between types [USD/tCO₂e]")
 ylabels = ("Reduction in labour [%]", "Emissions [GtCO₂e/year]", "Change in annual costs [% of zero-tax output]", "USD/tCO₂e", "Annual investment costs [% of zero-tax output]", "Capacity installed per year", "Years for a unit signal-to-noise ratio")
 figures = [CairoMakie.Figure(size = figuresize, backgroundcolor = background) for _ in filenames]
-plotaxes = [CairoMakie.Axis(figure[1, 1]; title, xlabel, ylabel) for (figure, title, xlabel, ylabel) in zip(figures, titles, xlabels, ylabels)]
+gaps = exp10.(range(-1, log10(τmax); length = 301))
+noises = signal.σ .* (0.5, 1., 2.)
+learninglimits = (extrema(gaps), ((minimum(noises) / (signal.ϵ * last(gaps) * taxfactor))^2, (maximum(noises) / (signal.ϵ * first(gaps) * taxfactor))^2))
+plotaxes = [CairoMakie.Axis(figure[1, 1]; title, xlabel, ylabel, xscale = index == 7 ? log10 : identity, yscale = index == 7 ? log10 : identity, limits = index == 7 ? learninglimits : (nothing, nothing)) for (index, (figure, title, xlabel, ylabel)) in enumerate(zip(figures, titles, xlabels, ylabels))]
 
 ## Labour supply
-
 elasticities = sort(unique([inv(inversefrisch(household)), 0.5, 1.]))
 colours = (defaultpalette[:abatement], defaultpalette[:committed], defaultpalette[:damages])
 for (index, elasticity) in enumerate(elasticities)
@@ -71,7 +72,6 @@ for (index, elasticity) in enumerate(elasticities)
 end
 
 ## Emissions and the calibration reference
-
 tplotaxes = (0., τpreferred, last(τs) * taxfactor)
 for (index, τ) in enumerate(tplotaxes)
     emissions = [e(n(τ, a, household, firm), a, firm) for a in abatement]
@@ -81,7 +81,6 @@ CairoMakie.scatter!(plotaxes[2], [firm.a₀ / firm.η], [firm.e₀]; color = def
 plotaxes[2].xtickformat = percenttickformat
 
 ## Static welfare: no investment or continuation-value effects
-
 labour = [n(τ * taxfactor, firm.a₀, household, firm) for τ in τs]
 labourcost = [(v(nₜ, household) - y(nₜ, firm) - v(n₀, household) + output) / output for nₜ in labour]
 damagecost = [d(e(nₜ, firm.a₀, firm), climate) * y(nₜ, firm) / output - d(e(n₀, firm.a₀, firm), climate) for nₜ in labour]
@@ -94,7 +93,8 @@ CairoMakie.vlines!(plotaxes[3], [τpreferred / taxfactor]; color = defaultpalett
 
 # The static rule has a separate zero-rate convention exactly at capacity.
 preferred = [statictax(a, household, firm, climate) / taxfactor for a in abatement[1:end-1]]
-CairoMakie.lines!(plotaxes[4], shares[1:end-1], preferred; color = defaultpalette[:abatement], linewidth = publicationdefault(:medianlinewidth), label = "Preferred static tax")
+CairoMakie.lines!(plotaxes[4], shares[1:end-1], preferred; color = defaultpalette[:abatement], linewidth = publicationdefault(:medianlinewidth), label = "Static welfare optimum")
+CairoMakie.hlines!(plotaxes[4], [government.τ̄ / taxfactor]; color = defaultpalette[:damages], linestyle = :dashdot, linewidth = publicationdefault(:guidelinewidth), label = "Behaviourally preferred tax")
 CairoMakie.hlines!(plotaxes[4], [τcontact / taxfactor]; color = defaultpalette[:committed], linestyle = :dash, linewidth = publicationdefault(:guidelinewidth), label = "Pre-contact Ramsey price")
 CairoMakie.hlines!(plotaxes[4], [τsupply / taxfactor]; color = defaultpalette[:guide], linestyle = :dot, linewidth = publicationdefault(:guidelinewidth), label = "Permanent supporting price")
 plotaxes[4].xtickformat = percenttickformat
@@ -122,10 +122,6 @@ plotaxes[6].ytickformat = percenttickformat
 
 ## Information content of a fixed tax gap
 
-gaps = exp10.(range(-1, log10(τmax); length = 301))
-noises = signal.σ .* (0.5, 1., 2.)
-plotaxes[7].xscale = log10
-plotaxes[7].yscale = log10
 for (index, σ) in enumerate(noises)
     # Signal drift separation is ϵ*Δτ; its noise variance over t years is σ²*t.
     times = [(σ / (signal.ϵ * gap * taxfactor))^2 for gap in gaps]
@@ -134,25 +130,14 @@ end
 
 ## Export
 
-captions = (
-    Printf.@sprintf("Initial abatement fixed; ν/A = %.3g; zero-tax output = %.3g trillion USD/year", household.ν / firm.A, output),
-    Printf.@sprintf("Zero-tax gross emissions = %.3g GtCO₂e/year; initial installed share = %.1f%%", e(n₀, 0, firm), 100firm.a₀ / firm.η),
-    Printf.@sprintf("Relative to zero tax at initial abatement; γ = %.5g; investment held at zero", climate.γ),
-    Printf.@sprintf("Capacity endpoint excluded; pre-contact minus supporting price = %.2f USD/tCO₂e", (τcontact - τsupply) / taxfactor),
-    Printf.@sprintf("c = %.3g, ξ = %.3g; reference duration is illustrative, not a solved transition", c(firm), firm.ξ),
-    L"$\alpha(q)=\max\{q-c,0\}/\xi$; investment is zero below the installation price",
-    L"Fixed tax gap: $t=[\sigma/(\epsilon\Delta\tau)]^2$; no endogenous policy adjustment",
-)
-
-for (figure, axis, name, caption) in zip(figures, plotaxes, filenames, captions)
+for (figure, axis, name) in zip(figures, plotaxes, filenames)
     CairoMakie.Legend(figure[2, 1], axis; orientation = :horizontal, tellwidth = false)
-    CairoMakie.Label(figure[3, 1], caption; fontsize = publicationdefault(:annotationfontsize), color = defaultpalette[:guide], tellwidth = false)
     savepublicationfigure(joinpath(figurepath, name), figure)
 end
 
 open(joinpath(figurepath, "parameters.csv"), "w") do file
     println(file, "parameter,value")
-    for (name, value) in (("A", firm.A), ("nu", household.ν), ("inversefrisch", inversefrisch(household)), ("r", household.r), ("eta", firm.η), ("a0", firm.a₀), ("e0", firm.e₀), ("kappa", firm.κ), ("xi", firm.ξ), ("c", c(firm)), ("gamma", climate.γ), ("epsilon", signal.ϵ), ("sigma", signal.σ), ("output", output), ("initialemissions", e(n₀, firm.a₀, firm)), ("initialdamagefraction", d(e(n₀, firm.a₀, firm), climate)), ("supportingtaxUSD", τsupply / taxfactor), ("precontacttaxUSD", τcontact / taxfactor), ("statictaxUSD", τpreferred / taxfactor), ("referencehorizon", referencehorizon))
+    for (name, value) in (("A", firm.A), ("nu", household.ν), ("inversefrisch", inversefrisch(household)), ("r", household.r), ("eta", firm.η), ("a0", firm.a₀), ("e0", firm.e₀), ("kappa", firm.κ), ("xi", firm.ξ), ("c", c(firm)), ("gamma", climate.γ), ("behaviouralcurvature", government.κᵇ), ("preferredtaxUSD", government.τ̄ / taxfactor), ("epsilon", signal.ϵ), ("sigma", signal.σ), ("output", output), ("initialemissions", e(n₀, firm.a₀, firm)), ("initialdamagefraction", d(e(n₀, firm.a₀, firm), climate)), ("supportingtaxUSD", τsupply / taxfactor), ("precontacttaxUSD", τcontact / taxfactor), ("statictaxUSD", τpreferred / taxfactor), ("referencehorizon", referencehorizon), ("referenceinvestmentshare", k(α₀, firm) / output))
         println(file, name, ",", value)
     end
 end

@@ -1,6 +1,7 @@
 import SHA
 
 const solutionhashlength = 12
+const ncversion = "behavioural-v1"
 
 function parameterstring(x)
     # `string` uses Julia's shortest round-trippable representation for floats, so distinct parameter values are not collapsed by display rounding.
@@ -39,19 +40,21 @@ function signallabel(signal::Signal)
     ), "_")
 end
 
+governmentlabel(government::Government) = "kappab$(parameterstring(government.κᵇ))_preferredtax$(parameterstring(government.τ̄))"
+
 function solutionlabel(household::AbstractHousehold, firm::Firm, signal::Signal, climate::Climate)
     join((solutionlabel(household, firm, climate), signallabel(signal)), "_")
 end
 
 function committedsolutionfilename(model; initialtax = nothing, intervals = 100)
-    label = join(("committed-full-interval-bvp-v2", solutionlabel(model.household, model.firm, model.climate), parameterstring(c(model.firm)), parameterstring(initialtax), string(intervals)), "_")
+    label = join(("committed-full-interval-bvp-v3", solutionlabel(model.household, model.firm, model.climate), parameterstring(c(model.firm)), parameterstring(initialtax), string(intervals)), "_")
     return "committed-simplified-$(first(bytes2hex(SHA.sha256(label)), solutionhashlength)).jld2"
 end
 
-function noncommittedsolutionkey(solution)
+function ncsolutionkey(solution)
     parameters = solution.parameters
     model, path = parameters.model, parameters.τᶜ
     settings = [string(field, "=", parameterstring(getfield(parameters, field))) for field in fieldnames(typeof(parameters)) if getfield(parameters, field) isa Real]
-    label = join(("simplified-markov-v4", string(nameof(typeof(parameters))), solutionlabel(model.household, model.firm, parameters.signal, model.climate), parameterstring(c(model.firm)), parameterstring(parameters.grid.h), parameterstring(parameters.grid.φ.lower), parameterstring(parameters.grid.φ.upper), parameterstring(parameters.grid.A.lower), parameterstring(parameters.grid.A.upper), join(settings, ","), join(parameterstring.(solution.t), ","), join(parameterstring.(path.ts), ","), join(parameterstring.(path.taxpath), ","), parameterstring(path.tailtax)), "_")
+    label = join((ncversion, string(nameof(typeof(parameters))), solutionlabel(model.household, model.firm, parameters.signal, model.climate), governmentlabel(parameters.government), parameterstring(c(model.firm)), parameterstring(parameters.grid.h), parameterstring(parameters.grid.φ.lower), parameterstring(parameters.grid.φ.upper), parameterstring(parameters.grid.A.lower), parameterstring(parameters.grid.A.upper), join(settings, ","), join(parameterstring.(solution.t), ","), join(parameterstring.(path.ts), ","), join(parameterstring.(path.taxpath), ","), parameterstring(path.tailtax)), "_")
     return "noncommitted/$(bytes2hex(SHA.sha256(label)))"
 end

@@ -31,6 +31,12 @@ const publicationtheme = CairoMakie.Theme(
 publicationdefault(key::Symbol) = getproperty(publicationsettings, key)
 percenttickformat(values) = [Printf.@sprintf("%.0f%%", 100value) for value in values]
 
+function publicationfigurepath(plotpath, household, firm, climate, experiment, runlabel)
+    calibration = first(bytes2hex(SHA.sha256(solutionlabel(household, firm, climate))), solutionhashlength)
+    run = first(bytes2hex(SHA.sha256(runlabel)), solutionhashlength)
+    return joinpath(plotpath, "calibration-$calibration", "$experiment-$run")
+end
+
 function savepublicationfigure(basename, figure)
     CairoMakie.save("$basename.pdf", figure; pt_per_unit = 1)
     CairoMakie.save("$basename.png", figure; px_per_unit = 2)

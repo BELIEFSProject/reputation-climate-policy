@@ -13,6 +13,7 @@ import UnPack: @unpack
 import LaTeXStrings: @L_str
 import LinearAlgebra as LA
 import SparseArrays as SP
+import OrdinaryDiffEq as ODE
 
 DotEnv.load!()
 
@@ -30,6 +31,7 @@ includet("../../src/solve/model.jl")
 includet("../../src/solve/government/committed.jl")
 includet("../../src/solve/government/noncommittedmarkov.jl")
 includet("../../src/solve/government/noncommitteddae.jl")
+includet("../../src/dynamics/committed.jl")
 
 includet("../../src/utils/arguments.jl")
 includet("../../src/utils/saving.jl")
@@ -44,8 +46,10 @@ CairoMakie.set_theme!(publicationtheme)
 CairoMakie.update_theme!(backgroundcolor = background, Axis = (; backgroundcolor = background), Legend = (; backgroundcolor = background))
 
 figuresize = (960, 540)
-φ₀ = 0.5
+φ₀ = 0.8
 Δt = 0.25
+characteristicstep = 0.05
+characteristictolerance = 1e-8
 
 rootdirectory = normpath(joinpath(@__DIR__, "..", ".."))
 datapath = get(ENV, "DATAPATH", joinpath(rootdirectory, "data"))
@@ -60,7 +64,7 @@ if isempty(solutionfile)
     sort!(validfiles; by = mtime, rev = true)
     equilibria = filter(!isnothing, loadreputationequilibrium.(validfiles))
     label = solutionlabel(household, firm, signal, climate)
-    candidates = filter(equilibrium -> solutionlabel(equilibrium.solution.parameters.model.household, equilibrium.solution.parameters.model.firm, equilibrium.solution.parameters.signal, equilibrium.solution.parameters.model.climate) == label, equilibria)
+    candidates = filter(equilibrium -> solutionlabel(equilibrium.solution.parameters.model.household, equilibrium.solution.parameters.model.firm, equilibrium.solution.parameters.signal, equilibrium.solution.parameters.model.climate) == label && equilibrium.solution.parameters.government == government, equilibria)
     if isempty(candidates)
         error("No saved non-committed equilibrium matches the calibration. Set REPUTATION_SOLUTION to select a saved file.")
     end
@@ -83,16 +87,17 @@ if maximum(d -> max(d.valuegap, d.bellmangap), baseline.solution.diagnostics) > 
     error("Saved equilibrium residuals exceed tolerance in $(baseline.filename).")
 end
 
-basefigurepath = joinpath(plotpath, splitext(basename(baseline.filename))[1], "reputation")
+runlabel = join(("characteristic-v1", ncsolutionkey(baseline.solution), string(φ₀), string(Δt), string(characteristicstep), string(characteristictolerance)), "|")
 @info "Plotting commitment comparisons" source = baseline.filename noise = parameters.signal.σ horizon = horizon
 
 ## Commitment and non-commitment transitions
 
 @info "Comparing committed and non-committed transitions" initialbelief = φ₀
-figurepath = joinpath(basefigurepath, "commitment")
+figurepath = publicationfigurepath(plotpath, household, firm, model.climate, "commitment", runlabel)
 mkpath(figurepath)
 benchmark = loadreputationbenchmark(baseline, joinpath(datapath, "solutions"))
 ts, paths, diagnostics = simulatecommitment(baseline; initialbelief = φ₀, timestep = Δt, diagnostics = true)
+characteristic = simulatecharacteristic(baseline.solution, ts; timestep = characteristicstep, tolerance = characteristictolerance)
 benchmarkvalues = zeros(eltype(ts), length(ts), 10)
 
 for (k, t) in enumerate(ts)
@@ -138,8 +143,6 @@ for panel in eachindex(series)
     end
 
     CairoMakie.Legend(figure[2, 1], axis; orientation = :horizontal, tellwidth = false)
-    caption = panel == 1 ? "Includes net-zero states, where the tax rate has no effect on emissions" : Printf.@sprintf("Common Markov grid; private-information prior %.0f%%; no additional news shock", 100φ₀)
-    CairoMakie.Label(figure[3, 1], caption; fontsize = publicationdefault(:annotationfontsize), color = defaultpalette[:guide], tellwidth = false)
     savepublicationfigure(joinpath(figurepath, filenames[panel]), figure)
 end
 
@@ -149,7 +152,6 @@ for case in 2:3
     CairoMakie.lines!(gapaxis, ts, diagnostics[:, 4, case] ./ taxfactor; color = colours[case + 1], linewidth = publicationdefault(:medianlinewidth), label = cases[case + 1])
 end
 CairoMakie.Legend(gapfig[2, 1], gapaxis; orientation = :horizontal, tellwidth = false)
-CairoMakie.Label(gapfig[3, 1], L"$\mathbb{E}[\tau^{\mathrm{c}}-\tau\mid a<\eta]$; net-zero states excluded"; fontsize = publicationdefault(:annotationfontsize), color = defaultpalette[:guide], tellwidth = false)
 savepublicationfigure(joinpath(figurepath, "policy-gap"), gapfig)
 
 open(joinpath(figurepath, "diagnostics.csv"), "w") do file
@@ -161,25 +163,39 @@ open(joinpath(figurepath, "diagnostics.csv"), "w") do file
     end
 end
 
-checkfig = CairoMakie.Figure(size = figuresize, backgroundcolor = background)
-checkaxis = CairoMakie.Axis(checkfig[1, 1]; xlabel = "Years since announcement", ylabel = "Share of abatement capacity", title = "Known-commitment benchmark check", ytickformat = percenttickformat, limits = ((0, horizon), (0, 1.02)))
-
-for case in 1:2
-    CairoMakie.lines!(checkaxis, ts, series[4][:, case]; color = colours[case], linestyle = case == 1 ? :dash : :solid, linewidth = publicationdefault(:medianlinewidth), label = cases[case])
+for (column, scale, title, ylabel, filename) in zip((4, 5), (firm.η, c(firm)), ("Known-commitment abatement check", "Known-commitment valuation check"), ("Share of abatement capacity", L"$q/c$"), ("benchmark-abatement", "benchmark-valuation"))
+    checkfig = CairoMakie.Figure(size = figuresize, backgroundcolor = background)
+    checkaxis = CairoMakie.Axis(checkfig[1, 1]; xlabel = "Years since announcement", ylabel, title, limits = ((0, horizon), (0, nothing)))
+    if column == 4
+        checkaxis.ytickformat = percenttickformat
+        CairoMakie.ylims!(checkaxis, 0, 1.02)
+    end
+    for (values, colour, style, caption) in zip((benchmarkvalues, characteristic, paths[:, :, 1]), (defaultpalette[:guide], defaultpalette[:abatement], defaultpalette[:committed]), (:dash, :dot, :solid), (cases[1], "Known commitment (characteristic)", cases[2]))
+        CairoMakie.lines!(checkaxis, ts, values[:, column] ./ scale; color = colour, linestyle = style, linewidth = publicationdefault(:medianlinewidth), label = caption)
+    end
+    CairoMakie.Legend(checkfig[2, 1], checkaxis; orientation = :horizontal, tellwidth = false)
+    savepublicationfigure(joinpath(figurepath, filename), checkfig)
 end
-
-CairoMakie.Legend(checkfig[2, 1], checkaxis; orientation = :horizontal, tellwidth = false)
-CairoMakie.Label(checkfig[3, 1], Printf.@sprintf("Same announcement and primitives; Markov grid h = %.3g", grid.h); fontsize = publicationdefault(:annotationfontsize), color = defaultpalette[:guide], tellwidth = false)
-savepublicationfigure(joinpath(figurepath, "benchmark-abatement"), checkfig)
 
 open(joinpath(figurepath, "paths.csv"), "w") do file
     println(file, "case,time,taxUSD,expectedtaxUSD,reputation,abatementshare,valuationratio,investmentshare,labourratio,output,emissions,cumulativeemissions")
     for case in 1:4, k in eachindex(ts)
         println(file, join((cases[case], ts[k], (values[k, case] for values in series)...), ","))
     end
+    for k in eachindex(ts)
+        println(file, join(("Known commitment (characteristic)", ts[k], (characteristic[k, column] / scale for (column, scale) in zip(columns, scales))...), ","))
+    end
+end
+
+open(joinpath(figurepath, "benchmark.csv"), "w") do file
+    println(file, "time,h,timestep,ramseyabatement,characteristicabatement,markovabatement,ramseyvaluation,characteristicvaluation,markovvaluation")
+    for k in eachindex(ts)
+        println(file, join((ts[k], grid.h, parameters.timestep, benchmarkvalues[k, 4] / firm.η, characteristic[k, 4] / firm.η, paths[k, 4, 1] / firm.η, benchmarkvalues[k, 5] / c(firm), characteristic[k, 5] / c(firm), paths[k, 5, 1] / c(firm)), ","))
+    end
 end
 
 @info "Commitment comparison" terminalabatement = series[4][end, :] terminalemissions = series[9][end, :] cumulativeemissions = series[10][end, :]
 @info "Commitment comparison gaps" maximumabatementgap = maximum(abs, paths[:, 4, 2] .- paths[:, 4, 3]) / firm.η maximumemissionsgap = maximum(abs, paths[:, 9, 2] .- paths[:, 9, 3]) terminalcapacitymass = diagnostics[end, 1, :]
+@info "Known-commitment benchmark gaps" gridstep = grid.h timestep = parameters.timestep characteristicabatementgap = maximum(abs, characteristic[:, 4] .- benchmarkvalues[:, 4]) / firm.η chainabatementgap = maximum(abs, paths[:, 4, 1] .- characteristic[:, 4]) / firm.η characteristicvaluationgap = maximum(abs, characteristic[:, 5] .- benchmarkvalues[:, 5]) / c(firm)
 
 @info "Saved commitment comparison figures" directory = figurepath

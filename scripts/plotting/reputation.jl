@@ -65,7 +65,7 @@ equilibria = filter(!isnothing, loadreputationequilibrium.(validfiles))
 
 if isempty(solutionfile)
     label = solutionlabel(household, firm, signal, climate)
-    candidates = filter(equilibrium -> solutionlabel(equilibrium.solution.parameters.model.household, equilibrium.solution.parameters.model.firm, equilibrium.solution.parameters.signal, equilibrium.solution.parameters.model.climate) == label, equilibria)
+    candidates = filter(equilibrium -> solutionlabel(equilibrium.solution.parameters.model.household, equilibrium.solution.parameters.model.firm, equilibrium.solution.parameters.signal, equilibrium.solution.parameters.model.climate) == label && equilibrium.solution.parameters.government == government, equilibria)
 
     if isempty(candidates)
         error("No current non-committed equilibrium matches the calibration. Run scripts/noncommitted.jl, or set REPUTATION_SOLUTION to a saved solution file.")
@@ -105,7 +105,8 @@ for equilibrium in matches
     end
 end
 
-figurepath = joinpath(plotpath, splitext(basename(baseline.filename))[1], "reputation")
+runlabel = join((join(ncsolutionkey.(getproperty.(matches, :solution)), ","), string(φ₀), string(oddsratio), string(Δt), string(nearzeroshare), string(nshocks)), "|")
+figurepath = publicationfigurepath(plotpath, household, firm, model.climate, "reputation", runlabel)
 mkpath(figurepath)
 
 @info "Plotting reputation and the transition" source = baseline.filename noise = signal.σ horizon = horizon newsdate = tₛ
@@ -131,7 +132,6 @@ slices = (1:size(grid, 1)) .+ (j - 1) * size(grid, 1)
 τᶜ = parameters.τᶜ(tₛ)
 value = baseline.solution(tₛ)
 q = value.q[:, j] ./ c(firm)
-slicetitle = Printf.@sprintf("At year %.1f and %.0f%% abatement", tₛ, 100a / firm.η)
 
 ## Tax flatness: intrinsic preferences, observed pooling and reputation
 
@@ -141,7 +141,6 @@ regimesmap = (preferencegap[:, 1:end-1], policygap[:, 1:end-1], taxwedge[:, 1:en
 
 const regimetitles = ("Downward-deviation incentive", "Distance from announcement", "Reputational tax wedge")
 const regimenames = ("incentive", "announcement-gap", "reputation-wedge")
-const regimecaptions = (L"$\tau^{\mathrm{c}}-\tau_P(a)$; capacity boundary excluded", L"$\tau^{\mathrm{c}}-\tau$; capacity boundary excluded", L"$\tau-\min\{\tau_P(a),\tau^{\mathrm{c}}\}$; capacity boundary excluded")
 
 regimecolours = (CairoMakie.cgrad([defaultpalette[:abatement], background, defaultpalette[:damages]]), CairoMakie.cgrad([background, defaultpalette[:damages]]), CairoMakie.cgrad([defaultpalette[:damages], background, defaultpalette[:abatement]]))
 
@@ -158,7 +157,6 @@ for panel in 1:3
 
     CairoMakie.Colorbar(figure[1, 2], image; label = "USD/tCO₂e", width = 12)
     CairoMakie.Legend(figure[2, 1:2], axis; orientation = :horizontal, tellwidth = false)
-    CairoMakie.Label(figure[3, 1:2], regimecaptions[panel]; fontsize = publicationdefault(:annotationfontsize), color = defaultpalette[:guide], tellwidth = false)
 
     panelpath = joinpath(figurepath, "tax-regime-map-$(regimenames[panel])")
     savepublicationfigure(panelpath, figure)
@@ -171,7 +169,7 @@ announcementtimes = unique(parameters.τᶜ.ts)
 incentivevalues = [(parameters.τᶜ(t; side = :left) - preferred[j]) / taxfactor for t in announcementtimes, j in 1:(length(preferred) - 1)]
 incentivebounds = max(1, maximum(abs, incentivevalues))
 incentivemap = CairoMakie.heatmap!(incentiveaxis, announcementtimes, abatementshare, incentivevalues; colormap = regimecolours[1], colorrange = (-incentivebounds, incentivebounds))
-CairoMakie.Colorbar(regimefigures[1][1, 2], incentivemap; label = L"$\tau^{\mathrm{c}}-\tau_P(a)$ [USD/tCO₂e]", width = 12)
+CairoMakie.Colorbar(regimefigures[1][1, 2], incentivemap; label = L"$\tau^{\mathrm{c}}-\bar\tau$ [USD/tCO₂e]", width = 12)
 
 if minimum(incentivevalues) < 0 < maximum(incentivevalues)
     CairoMakie.contour!(incentiveaxis, announcementtimes, abatementshare, incentivevalues; levels = [0], color = defaultpalette[:guide], linewidth = publicationdefault(:guidelinewidth))
@@ -192,13 +190,11 @@ for case in 1:2
 end
 
 const exposurenames = ("incentive", "pooling", "wedge")
-const exposurecaptions = ("Green: no intrinsic incentive to cut tax; curves show mean abatement", "Solid: observed pooling; dashed: intrinsic preference; shares reflect discrete grid crossings", "Mean absolute tax wedge conditional on being below full abatement")
 
 for (panel, axis) in enumerate((incentiveaxis, poolaxis, wedgeaxis))
     figure = regimefigures[panel]
     CairoMakie.vlines!(axis, [tₛ]; color = defaultpalette[:guide], linestyle = :dot, linewidth = publicationdefault(:guidelinewidth))
     CairoMakie.Legend(figure[2, 1], axis; orientation = :horizontal, tellwidth = false)
-    CairoMakie.Label(figure[3, 1], exposurecaptions[panel]; fontsize = publicationdefault(:annotationfontsize), color = defaultpalette[:guide], tellwidth = false)
     savepublicationfigure(joinpath(figurepath, "tax-regime-exposure-$(exposurenames[panel])"), figure)
 end
 
@@ -219,7 +215,6 @@ CairoMakie.Legend(policyfigures[1][2, 1], policyaxes[1]; orientation = :horizont
 const policynames = ("policy", "investment-value", "investment")
 
 for (panel, figure) in enumerate(policyfigures)
-    CairoMakie.Label(figure[3, 1], slicetitle; fontsize = publicationdefault(:annotationfontsize), color = defaultpalette[:guide], tellwidth = false)
 
     paneldir = joinpath(figurepath, "reputation-mechanism-$(policynames[panel])")
     savepublicationfigure(paneldir, figure)
@@ -248,7 +243,6 @@ for panel in 1:4
 
     CairoMakie.Legend(figure[2, 1], axis; orientation = :horizontal, tellwidth = false)
     CairoMakie.Label(figure[0, 1], Printf.@sprintf("Unexpected news at year %.1f: commitment odds fall by %.0f%%", tₛ, 100(1 - oddsratio)); fontsize = publicationdefault(:paneltitlefontsize), tellwidth = false)
-    CairoMakie.Label(figure[3, 1], "Expected paths conditional on a non-committed government"; fontsize = publicationdefault(:annotationfontsize), color = defaultpalette[:guide], tellwidth = false)
     savepublicationfigure(joinpath(figurepath, "reputation-transition-$(transitionnames[panel])"), figure)
 end
 
@@ -284,7 +278,6 @@ for panel in 1:2
     CairoMakie.Label(figure[-1, 1], timingtitles[panel]; fontsize = publicationdefault(:paneltitlefontsize), tellwidth = false)
     CairoMakie.Label(figure[0, 1], "Point labels: pre-shock baseline emissions [GtCO₂e/year]"; fontsize = publicationdefault(:annotationfontsize), color = defaultpalette[:guide], tellwidth = false)
     CairoMakie.Legend(figure[2, 1], axis; orientation = :horizontal, tellwidth = false)
-    CairoMakie.Label(figure[3, 1], Printf.@sprintf("Commitment odds fall by %.0f%%; common horizon %.1f years; true government non-committed", 100(1 - oddsratio), horizon); fontsize = publicationdefault(:annotationfontsize), color = defaultpalette[:guide], tellwidth = false)
     savepublicationfigure(joinpath(figurepath, "reputation-shock-timing-$(timingnames[panel])"), figure)
 end
 
@@ -329,7 +322,6 @@ informationseries = (χvalues.^2 ./ 2, σᵩ, τ̂ ./ taxfactor)
 informationtitles = ("Statistical separation", "Belief volatility", "Hidden best response")
 informationlabels = (L"$\chi^2/2$ [per year]", L"$\sigma_\phi$ [per $\sqrt{\mathrm{year}}$]", "USD/tCO₂e")
 informationnames = ("separation", "belief-volatility", "best-response")
-informationcaption = iszero(Δτ) ? "Policy mimics at this state: the local signal carries no information about type" : "Policy forecasts and continuation values held fixed"
 
 for panel in 1:3
     figure = CairoMakie.Figure(size = figuresize, backgroundcolor = background)
@@ -337,7 +329,6 @@ for panel in 1:3
     CairoMakie.vlines!(axis, [1]; color = defaultpalette[:guide], linestyle = :dot, linewidth = publicationdefault(:guidelinewidth))
     CairoMakie.lines!(axis, σratios, informationseries[panel]; color = defaultpalette[:abatement], linewidth = publicationdefault(:medianlinewidth))
     CairoMakie.Label(figure[0, 1], Printf.@sprintf("The information channel at year %.1f, φ = %.0f%%", tₛ, 100φ); fontsize = publicationdefault(:paneltitlefontsize), tellwidth = false)
-    CairoMakie.Label(figure[2, 1], informationcaption; fontsize = publicationdefault(:annotationfontsize), color = defaultpalette[:guide], tellwidth = false)
     savepublicationfigure(joinpath(figurepath, "ets-information-channel-$(informationnames[panel])"), figure)
 end
 
@@ -371,7 +362,6 @@ if length(matches) > 1
 
         CairoMakie.Legend(figure[2, 1], axis; orientation = :horizontal, tellwidth = false)
         CairoMakie.Label(figure[0, 1], "Market noise, credibility and the transition"; fontsize = publicationdefault(:paneltitlefontsize), tellwidth = false)
-        CairoMakie.Label(figure[3, 1], "Each point uses an equilibrium solved for its signal noise; all other settings are matched"; fontsize = publicationdefault(:annotationfontsize), color = defaultpalette[:guide], tellwidth = false)
         savepublicationfigure(joinpath(figurepath, "ets-equilibrium-comparison-$(comparisonnames[panel])"), figure)
     end
 else
@@ -381,7 +371,7 @@ end
 ## Quantitative summary
 
 open(joinpath(figurepath, "tax-regime-grid.csv"), "w") do file
-    println(file, "signalnoise,time,announcement,staticminimum,staticmaximum,taxminimum,taxmaximum,beliefspread,abatementspread,intrinsicpoolinggridshare,observedpoolinggridshare,reputationaffectedgridshare,poolingruleerror,boundaryruleerror")
+    println(file, "signalnoise,time,announcement,preferredminimum,preferredmaximum,taxminimum,taxmaximum,beliefspread,abatementspread,intrinsicpoolinggridshare,observedpoolinggridshare,reputationaffectedgridshare,poolingruleerror,boundaryruleerror")
     for equilibrium in matches, value in equilibrium.solution.u
         p = equilibrium.solution.parameters
         preferred, policygap, preferencegap, wedge, flags = reputationtaxdiagnostics(equilibrium, value)

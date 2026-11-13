@@ -1,11 +1,13 @@
 import Roots
 import ForwardDiff as FD
 
-# Metadata retained for saved solution compatibility; current objectives use the welfare flow below.
 Base.@kwdef struct Government{T <: Real}
-    κₚ::T = defaultκₚ
-    b::T = defaultbᴾ
+    κᵇ::T = defaultκᵇ
+    τ̄::T = defaultτ̄
 end
+
+"Signed behavioural cost relative to the conjectured policy, held fixed during a hidden deviation."
+behaviouralcost(τ̂, τ, government::Government) = government.κᵇ * (τ̂ - τ) * ((τ̂ + τ) / 2 - government.τ̄)
 
 function κ₀(a, household::LinearHousehold, firm::Firm, climate::Climate)
     -firm.A^2 / (2 * household.ν) + climate.γ * firm.A^4 * (firm.η - a) / household.ν^2
@@ -23,14 +25,27 @@ function κ₂(a, household::LinearHousehold, firm::Firm, climate::Climate)
     firm.A^2 * (firm.η - a)^2 / household.ν + 2 * climate.γ * firm.A^4 * (firm.η - a)^3 / household.ν^2
 end
 
-# Evaluate at the actual tax for reduced-form government costs, or expected tax for GE welfare.
-function simplifiedcost(τ, a, ȧ, household::LinearHousehold, firm::Firm, climate::Climate)
+# Hidden deviations leave this resource cost evaluated at firms' expected tax.
+# relative=true removes the zero-emissions flow algebraically to preserve numerical precision.
+function simplifiedcost(τ, a, ȧ, household::LinearHousehold, firm::Firm, climate::Climate; relative = false)
+    if relative
+        output, gap = firm.A^2 / household.ν, emissivity(a, firm)
+        return k(ȧ, firm) + output * (gap * τ)^2 / 2 + climate.γ * gap * (output * (1 - gap * τ))^2
+    end
     k(ȧ, firm) + κ₀(a, household, firm, climate) + κ₁(a, household, firm, climate) * τ + κ₂(a, household, firm, climate) * τ^2 / 2
 end
 
-function simplifiedcost(τ, a, ȧ, household::Household, firm::Firm, climate::Climate)
+function simplifiedcost(τ, a, ȧ, household::Household, firm::Firm, climate::Climate; relative = false)
     labour = n(τ, a, household, firm)
     output = y(labour, firm)
+    if relative && household.ϕ == 2
+        referenceoutput = y(n(0, a, household, firm), firm)
+        fraction = output / referenceoutput
+        distortion = referenceoutput * (emissivity(a, firm) * τ)^2 * (fraction + 2) / (3 * (1 + fraction)^2)
+        return k(ȧ, firm) + distortion + climate.γ * emissivity(a, firm) * output^2
+    elseif relative
+        return k(ȧ, firm) + v(labour, household) - output + climate.γ * emissivity(a, firm) * output^2 - κ₀(firm.η, household, firm, climate)
+    end
     return k(ȧ, firm) + v(labour, household) - output + climate.γ * emissivity(a, firm) * output^2
 end
 

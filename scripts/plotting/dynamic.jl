@@ -68,7 +68,7 @@ equilibria = filter(!isnothing, loadreputationequilibrium.(files))
 
 if isempty(solutionfile)
     label = solutionlabel(household, firm, signal, climate)
-    candidates = filter(equilibrium -> solutionlabel(equilibrium.solution.parameters.model.household, equilibrium.solution.parameters.model.firm, equilibrium.solution.parameters.signal, equilibrium.solution.parameters.model.climate) == label, equilibria)
+    candidates = filter(equilibrium -> solutionlabel(equilibrium.solution.parameters.model.household, equilibrium.solution.parameters.model.firm, equilibrium.solution.parameters.signal, equilibrium.solution.parameters.model.climate) == label && equilibrium.solution.parameters.government == government, equilibria)
     if isempty(candidates)
         error("No saved equilibrium matches the calibration. Run scripts/noncommitted.jl or set REPUTATION_SOLUTION.")
     end
@@ -110,11 +110,11 @@ cases = ("fixed", "uniform")
 ## Simulate the physical belief diffusion
 
 # The cache identity includes every source equilibrium and simulation setting.
-cachelabel = join(("physical-belief-sde-v1", join(noncommittedsolutionkey.(getproperty.(matches, :solution)), ","), string(φ₀), string(npaths), string(seed), string(Δt), string(saveinterval), string(committed)), "|")
+cachelabel = join(("physical-belief-sde-v1", join(ncsolutionkey.(getproperty.(matches, :solution)), ","), string(φ₀), string(npaths), string(seed), string(Δt), string(saveinterval), string(committed)), "|")
 key = bytes2hex(SHA.sha256(cachelabel))
 tag = first(key, solutionhashlength)
 cachepath = joinpath(datapath, "simulations", "dynamic-$tag.jld2")
-figurepath = joinpath(plotpath, "dynamic-$tag")
+figurepaths = [publicationfigurepath(plotpath, household, firm, parameters.model.climate, "dynamic-$name", cachelabel) for name in cases]
 mkpath(dirname(cachepath))
 
 if isfile(cachepath)
@@ -166,43 +166,39 @@ scales = (taxfactor, taxfactor, 1, firm.η, c(firm), firm.η, n(0, firm.a₀, ho
 titles = ("Carbon policy", "Expected carbon policy", "Reputation", "Abatement", "Value of abatement investment", "Abatement investment", "Labour", "Output", "Emissions", "Cumulative emissions")
 labels = ("USD/tCO₂e", "USD/tCO₂e", "Probability of commitment", "Share of abatement capacity", L"$q/c$", "Share of capacity installed per year", "Labour / zero-tax labour", "Trillion USD/year", "GtCO₂e/year", "GtCO₂e")
 filenames = ("policy", "expected-policy", "belief", "abatement", "valuation", "investment", "labour", "output", "emissions", "cumulative-emissions")
-mkpath(figurepath)
-
-open(joinpath(figurepath, "summary.csv"), "w") do file
-    println(file, "case,noise,time,variable,lower,median,upper")
-    for (case, name) in enumerate(cases), panel in eachindex(columns)
-        figure = CairoMakie.Figure(size = figuresize, backgroundcolor = background)
-        axis = CairoMakie.Axis(figure[1, 1]; xlabel = "Years since announcement", ylabel = labels[panel], title = titles[panel], limits = ((0, horizon), (0, nothing)))
-        if panel in (3, 4, 6, 7)
-            axis.ytickformat = percenttickformat
-        end
-        if panel in (3, 4)
-            CairoMakie.ylims!(axis, 0, 1.02)
-        end
-
-        for k in eachindex(matches)
-            values = paths[case][k][:, columns[panel], :] ./ scales[panel]
-            quantiles = reduce(hcat, [Statistics.quantile(view(values, row, :), [interval[1], 0.5, interval[2]]) for row in axes(values, 1)])
-            lower, median, upper = eachrow(quantiles)
-            CairoMakie.band!(axis, ts, lower, upper; color = (colours[k], publicationdefault(:intervalopacity)))
-            for trajectory in 1:min(samplepaths, npaths)
-                CairoMakie.lines!(axis, ts, values[:, trajectory]; color = (colours[k], publicationdefault(:samplepathopacity)), linewidth = publicationdefault(:samplepathlinewidth))
+for (case, name) in enumerate(cases)
+    directory = figurepaths[case]
+    mkpath(directory)
+    open(joinpath(directory, "summary.csv"), "w") do file
+        println(file, "case,noise,time,variable,lower,median,upper")
+        for panel in eachindex(columns)
+            figure = CairoMakie.Figure(size = figuresize, backgroundcolor = background)
+            axis = CairoMakie.Axis(figure[1, 1]; xlabel = "Years since announcement", ylabel = labels[panel], title = titles[panel], limits = ((0, horizon), (0, nothing)))
+            if panel in (3, 4, 6, 7)
+                axis.ytickformat = percenttickformat
             end
-            CairoMakie.lines!(axis, ts, median; color = colours[k], linewidth = publicationdefault(:medianlinewidth), label = Printf.@sprintf("σ = %.2f", σs[k]))
-            for row in eachindex(ts)
-                println(file, join((name, σs[k], ts[row], filenames[panel], lower[row], median[row], upper[row]), ","))
+            if panel in (3, 4)
+                CairoMakie.ylims!(axis, 0, 1.02)
             end
-        end
 
-        priorlabel = case == 1 ? Printf.@sprintf("Initial belief %.0f%%", 100φ₀) : "Initial beliefs uniform on (0,1)"
-        typelabel = committed ? "Committed government" : "Non-committed government"
-        caption = Printf.@sprintf("%s; %s\nMedian and %.0f–%.0f%% bands; %d trajectories", typelabel, priorlabel, 100interval[1], 100interval[2], npaths)
-        CairoMakie.Legend(figure[2, 1], axis; orientation = :horizontal, tellwidth = false)
-        CairoMakie.Label(figure[3, 1], caption; fontsize = publicationdefault(:annotationfontsize), color = defaultpalette[:guide], tellwidth = false)
-        directory = joinpath(figurepath, name)
-        mkpath(directory)
-        savepublicationfigure(joinpath(directory, filenames[panel]), figure)
+            for k in eachindex(matches)
+                values = paths[case][k][:, columns[panel], :] ./ scales[panel]
+                quantiles = reduce(hcat, [Statistics.quantile(view(values, row, :), [interval[1], 0.5, interval[2]]) for row in axes(values, 1)])
+                lower, median, upper = eachrow(quantiles)
+                CairoMakie.band!(axis, ts, lower, upper; color = (colours[k], publicationdefault(:intervalopacity)))
+                for trajectory in 1:min(samplepaths, npaths)
+                    CairoMakie.lines!(axis, ts, values[:, trajectory]; color = (colours[k], publicationdefault(:samplepathopacity)), linewidth = publicationdefault(:samplepathlinewidth))
+                end
+                CairoMakie.lines!(axis, ts, median; color = colours[k], linewidth = publicationdefault(:medianlinewidth), label = Printf.@sprintf("σ = %.2f", σs[k]))
+                for row in eachindex(ts)
+                    println(file, join((name, σs[k], ts[row], filenames[panel], lower[row], median[row], upper[row]), ","))
+                end
+            end
+
+            CairoMakie.Legend(figure[2, 1], axis; orientation = :horizontal, tellwidth = false)
+            savepublicationfigure(joinpath(directory, filenames[panel]), figure)
+        end
     end
 end
 
-@info "Saved stochastic dynamics figures" directory = figurepath cache = cachepath noise = σs
+@info "Saved stochastic dynamics figures" directories = figurepaths cache = cachepath noise = σs

@@ -38,16 +38,16 @@ function reputationtaxregimes(a, τ, mandate, parameters, tolerance)
     if a ≥ firm.η
         return false, false, false, false, true
     end
-    preferred = statictax(a, household, firm, climate)
+    preferred = parameters.government.τ̄
     return mandate ≤ preferred, abs(mandate - τ) ≤ tolerance, abs(τ - min(preferred, mandate)) > tolerance, tolerance < τ < mandate - tolerance, false
 end
 
-"Maps use the stored policy; the indeterminate static tax at full capacity is excluded."
+"Maps use the stored policy; full capacity is excluded from interior regime statistics."
 function reputationtaxdiagnostics(equilibrium, value; tolerance = max(10equilibrium.solution.parameters.policytolerance * equilibrium.solution.parameters.taxscale, 32eps(eltype(value.τ)) * max(1, equilibrium.solution.parameters.taxscale)))
     parameters = equilibrium.solution.parameters
     household, firm, climate, grid = parameters.model.household, parameters.model.firm, parameters.model.climate, parameters.grid
     mandate = parameters.τᶜ(value.t)
-    preferred = [j == size(grid, 2) ? NaN : statictax(physicalstate(grid, 1, j)[2], household, firm, climate) for j in 1:size(grid, 2)]
+    preferred = [j == size(grid, 2) ? NaN : parameters.government.τ̄ for j in 1:size(grid, 2)]
     policygap, preferencegap, reputationwedge = (similar(value.τ) for _ in 1:3)
     regimes = falses(length(value.τ), 5)
     for j in 1:size(grid, 2), i in 1:size(grid, 1)
@@ -63,7 +63,7 @@ end
 
 function loadreputationequilibrium(filename)
     return JLD2.jldopen(filename, "r") do file
-        if !haskey(file, "noncommitted")
+        if !haskey(file, "ncversion") || file["ncversion"] != ncversion || !haskey(file, "noncommitted")
             return nothing
         end
         entries = collect(keys(file["noncommitted"]))
@@ -72,7 +72,7 @@ function loadreputationequilibrium(filename)
         end
         key = "noncommitted/$(only(entries))"
         solution = file["$key/solution"]
-        if !(solution.parameters isa NonCommittedDAEParameters) || key != noncommittedsolutionkey(solution)
+        if !(solution.parameters isa NCDAEParameters) || key != ncsolutionkey(solution)
             return nothing
         end
         return ReputationEquilibrium(solution, abspath(filename))
@@ -164,7 +164,7 @@ function reputationoperator(equilibrium, t; side = :right, nearzeroshare = 0.95,
     model, grid = parameters.model, parameters.grid
     household, firm = model.household, model.firm
     value = solution(t)
-    x = reshape(noncommitteddaestate(value, parameters), 4, size(grid)...)
+    x = reshape(ncstate(value, parameters), 4, size(grid)...)
     mandate = parameters.τᶜ(t; side)
     nodes = prod(size(grid))
     rows, columns, rates = Int[], Int[], eltype(value.q)[]
@@ -178,10 +178,10 @@ function reputationoperator(equilibrium, t; side = :right, nearzeroshare = 0.95,
     for j in 1:size(grid, 2), i in 1:size(grid, 1)
         node = i + (j - 1) * size(grid, 1)
         φ, a = physicalstate(grid, i, j)
-        τ, _ = noncommitteddaetax(x, parameters.taxscale * x[4, i, j], i, j, mandate, parameters; equilibrium = true)
-        τᵉ = noncommittedexpectedtax(φ, τ, mandate)
+        τ, _ = ncdaetax(x, parameters.taxscale * x[4, i, j], i, j, mandate, parameters; equilibrium = true)
+        τᵉ = ncexpectedtax(φ, τ, mandate)
         investment = j == size(grid, 2) ? 0 : α(value.q[i, j], firm)
-        μᵩ, σᵩ = noncommittedbeliefmoments(τ, mandate, φ, parameters.signal)
+        μᵩ, σᵩ = ncbeliefmoments(τ, mandate, φ, parameters.signal)
         B = φ * (1 - φ) * (parameters.signal.ϵ / parameters.signal.σ)^2 * (mandate - τ)
         if committed
             μᵩ = B * (mandate - τᵉ)
@@ -202,7 +202,7 @@ function reputationoperator(equilibrium, t; side = :right, nearzeroshare = 0.95,
         push!(rates, -(λ⁺ + λ⁻ + λₐ))
         # Regime diagnostics refer to the conjectured non-committed policy under either true type.
         regimes = reputationtaxregimes(a, τ, mandate, parameters, tolerance)
-        preferred = statictax(a, household, firm, model.climate)
+        preferred = parameters.government.τ̄
         wedge = a ≥ firm.η ? 0 : τ - min(preferred, mandate)
         labour = n(τᵉ, a, household, firm)
         actualtax = committed ? mandate : τ
