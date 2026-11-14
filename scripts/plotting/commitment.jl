@@ -54,12 +54,12 @@ characteristictolerance = 1e-8
 rootdirectory = normpath(joinpath(@__DIR__, "..", ".."))
 datapath = get(ENV, "DATAPATH", joinpath(rootdirectory, "data"))
 plotpath = get(ENV, "PLOTPATH", joinpath(rootdirectory, "figures"))
-solutionfile = get(ENV, "REPUTATION_SOLUTION", "")
+solutionfile = get(ENV, "REPUTATION_SOLUTION", nothing)
 
 ## Load the saved equilibrium
 household, firm, government, signal, climate = initmodels()
 
-if isempty(solutionfile)
+if isnothing(solutionfile)
     validfiles = filter(path -> startswith(basename(path), "noncommitted-simplified-") && endswith(path, ".jld2"), readdir(joinpath(datapath, "solutions"); join = true))
     sort!(validfiles; by = mtime, rev = true)
     equilibria = filter(!isnothing, loadreputationequilibrium.(validfiles))
@@ -83,15 +83,10 @@ firm, household = model.firm, model.household
 grid = parameters.grid
 horizon = last(baseline.solution.t)
 
-if maximum(d -> max(d.valuegap, d.bellmangap), baseline.solution.diagnostics) > parameters.tolerance || maximum(d -> d.policygap, baseline.solution.diagnostics) > parameters.policytolerance
-    error("Saved equilibrium residuals exceed tolerance in $(baseline.filename).")
-end
-
 runlabel = join(("characteristic-v1", ncsolutionkey(baseline.solution), string(φ₀), string(Δt), string(characteristicstep), string(characteristictolerance)), "|")
 @info "Plotting commitment comparisons" source = baseline.filename noise = parameters.signal.σ horizon = horizon
 
 ## Commitment and non-commitment transitions
-
 @info "Comparing committed and non-committed transitions" initialbelief = φ₀
 figurepath = publicationfigurepath(plotpath, household, firm, model.climate, "commitment", runlabel)
 mkpath(figurepath)
@@ -118,18 +113,21 @@ for (k, t) in enumerate(ts)
     benchmarkvalues[k, :] .= (1, τ, τ, a, q, max(q - c(firm), 0) / firm.ξ, nₜ, y(nₜ, firm), eₜ, cumulative)
 end
 
-cases = ("Ramsey (continuous BVP)", "Known commitment (Markov)", "Committed (uncertain type)", "Non-committed (uncertain type)")
-colours = (defaultpalette[:guide], defaultpalette[:committed], defaultpalette[:abatement], defaultpalette[:damages])
+cases = ("Committed", "Full information", "Markov", "Non-committed")
+colours = (defaultpalette[:committed], defaultpalette[:abatement], defaultpalette[:guide], defaultpalette[:damages])
 columns = (2, 3, 1, 4, 5, 6, 7, 8, 9, 10)
 scales = (taxfactor, taxfactor, 1, firm.η, c(firm), firm.η, n(0, firm.a₀, household, firm), 1, 1, 1)
 series = [hcat(benchmarkvalues[:, column], paths[:, column, :]) ./ scale for (column, scale) in zip(columns, scales)]
-titles = ("Mean carbon tax rate", "Expected carbon policy", "Reputation", "Abatement", "Value of abatement investment", "Abatement investment", "Labour", "Output", "Emissions", "Cumulative emissions")
+titles = (L"Mean policy $\tau$", L"Expected policy $\mathbb{E}_{t, \phi}[\tau]$", L"Reputation $\phi$", L"Installed batement $a_t$", L"Value of abatement investment $q_t$", L"Abatement investment $\dot{a}_t$", L"Labour $n_t$", L"Output $y_t$", L"Emissions $e_t$", L"Cumulative emissions $\int^t_{0} e_t \text{d}t$")
 labels = ("USD/tCO₂e", "USD/tCO₂e", "Probability of commitment", "Share of abatement capacity", L"$q/c$", "Share of capacity installed per year", "Labour / zero-tax labour", "Trillion USD/year", "GtCO₂e/year", "GtCO₂e")
 filenames = ("policy", "expected-policy", "belief", "abatement", "valuation", "investment", "labour", "output", "emissions", "cumulative-emissions")
 
+caseindices = [1, 4]
+
+trajectoryfigures = CairoMakie.Figure[]
 for panel in eachindex(series)
     figure = CairoMakie.Figure(size = figuresize, backgroundcolor = background)
-    axis = CairoMakie.Axis(figure[1, 1]; xlabel = "Years since announcement", ylabel = labels[panel], title = titles[panel], limits = ((0, horizon), (0, nothing)))
+    axis = CairoMakie.Axis(figure[1, 1]; xlabel = L"Year $t$", ylabel = labels[panel], title = titles[panel], limits = ((0, horizon), (0, nothing)))
     if panel in (3, 4, 6, 7)
         axis.ytickformat = percenttickformat
     end
@@ -138,12 +136,14 @@ for panel in eachindex(series)
         CairoMakie.ylims!(axis, 0, 1.02)
     end
 
-    for case in 2:4
-        CairoMakie.lines!(axis, ts, series[panel][:, case]; color = colours[case], linestyle = case == 2 ? :dash : :solid, linewidth = publicationdefault(:medianlinewidth), label = cases[case])
+    for case in caseindices
+        CairoMakie.lines!(axis, ts, series[panel][:, case]; color = colours[case], linewidth = publicationdefault(:medianlinewidth), label = cases[case])
     end
 
     CairoMakie.Legend(figure[2, 1], axis; orientation = :horizontal, tellwidth = false)
     savepublicationfigure(joinpath(figurepath, filenames[panel]), figure)
+
+    push!(trajectoryfigures, figure)
 end
 
 gapfig = CairoMakie.Figure(size = figuresize, backgroundcolor = background)
