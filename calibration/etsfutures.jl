@@ -52,7 +52,7 @@ colours = CairoMakie.resample_cmap(:viridis, length(maturitynames))
 
 etsfigure = CairoMakie.with_theme(slidetheme) do
     figure = CairoMakie.Figure(size = slidesize, backgroundcolor = "#FAFAFA")
-    axis = CairoMakie.Axis(figure[1, 1]; title = L"ETS Futures Prices $y^T_t$ by Maturity $T$", xlabel = "Date", ylabel = "Price € / tCO2e", backgroundcolor = "#FAFAFA", xticks = (tickpositions, ticklabels), xticklabelrotation = pi / 4)
+    axis = CairoMakie.Axis(figure[1, 1]; title = L"ETS Futures Prices $p^T_t$ by Maturity $T$", xlabel = "Date", ylabel = "Price € / tCO2e", backgroundcolor = "#FAFAFA", xticks = (tickpositions, ticklabels), xticklabelrotation = pi / 4)
 
     for (column, colour) in zip(maturitynames, colours)
         CairoMakie.lines!(axis, dayoffsets, dataplot[!, column]; color = colour, linewidth = publicationdefault(:samplepathlinewidth), label = column)
@@ -88,7 +88,7 @@ horizoncolours = [horizoncolormap[(h - 1) / max(maxhorizon - 1, 1)] for h in 1:m
 
 horizonfigure = CairoMakie.with_theme(slidetheme) do
     figure = CairoMakie.Figure(size = slidesize, backgroundcolor = "#FAFAFA")
-    axis = CairoMakie.Axis(figure[1, 1]; title = L"ETS Futures Price $x^h_t$ by Horizon $h$", xlabel = "Trading Date", ylabel = "Price (€/tCO₂)", backgroundcolor = "#FAFAFA", xticks = (tickpositions, ticklabels), xticklabelrotation = pi / 4, xminorticks = minortickpositions, xminorticksvisible = true)
+    axis = CairoMakie.Axis(figure[1, 1]; title = L"ETS Futures Price $x^h_t$ by Horizon $h$", xlabel = "Trading Date", ylabel = "USD/tCO₂e", backgroundcolor = "#FAFAFA", xticks = (tickpositions, ticklabels), xticklabelrotation = pi / 4, xminorticks = minortickpositions, xminorticksvisible = true)
 
     for h in 1:maxhorizon
         coverage[h] == 0 && continue
@@ -112,7 +112,7 @@ Printf.@printf "Local-level diffuse log likelihood: %.4f\n" locallevelfit.loglik
 
 locallevelfigure = CairoMakie.with_theme(slidetheme) do
     figure = CairoMakie.Figure(size = slidesize, backgroundcolor = "#FAFAFA")
-    noiseaxis = CairoMakie.Axis(figure[1, 1]; title = L"Horizon noise $\sigma \text{d}z_t$", xlabel = "Trading Date", ylabel = "Price (€/tCO₂)", backgroundcolor = "#FAFAFA", xticks = (tickpositions, ticklabels), xticklabelrotation = pi / 4, xminorticks = minortickpositions, xminorticksvisible = true)
+    noiseaxis = CairoMakie.Axis(figure[1, 1]; title = L"Horizon noise $\sigma \text{d}z_t$", xlabel = "Trading Date", ylabel = "USD/tCO₂e", backgroundcolor = "#FAFAFA", xticks = (tickpositions, ticklabels), xticklabelrotation = pi / 4, xminorticks = minortickpositions, xminorticksvisible = true)
     levelcolour = horizoncolormap[0.5]
 
     CairoMakie.hlines!(noiseaxis, [0]; color = (levelcolour, 0.4), linewidth = publicationdefault(:samplepathlinewidth))
