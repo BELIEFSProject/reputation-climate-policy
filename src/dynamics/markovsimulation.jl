@@ -64,9 +64,6 @@ function simulatedynamics(equilibrium, φ₀s, ts; timestep = 0.01, seed = 2026,
     solution = equilibrium.solution
     parameters = solution.parameters
     firm, path = parameters.model.firm, parameters.τᶜ
-    if !all(φ -> 0 < φ < 1, φ₀s) || timestep ≤ 0
-        throw(ArgumentError("Initial beliefs must lie in (0,1) and the simulation step must be positive."))
-    end
 
     # Interpolating policy fractions preserves exact pooling between announcement knots.
     fractions = [iszero(path(value.t)) ? zero.(value.τ) : value.τ ./ path(value.t) for value in solution.u]
@@ -104,6 +101,58 @@ function simulatedynamics(equilibrium, φ₀s, ts; timestep = 0.01, seed = 2026,
                 paths[k, column, trajectory] = values[column]
             end
             paths[k, 10, trajectory] = u[3]
+        end
+    end
+
+    return paths
+end
+
+"Simulate log odds, abatement and cumulative emissions; the output columns match simulatecommitment."
+function simulateensembledynamics(equilibrium, φ₀s, ts; trajectories = 1_000, timestep = 0.01, seed = 2026, committed = false)
+    solution = equilibrium.solution
+    parameters = solution.parameters
+    firm, path = parameters.model.firm, parameters.τᶜ
+
+    # Interpolating policy fractions preserves exact pooling between announcement knots.
+    fractions = [iszero(path(value.t)) ? zero.(value.τ) : value.τ ./ path(value.t) for value in solution.u]
+    jumps = unique([path.ts[k] for k in 1:(length(path.ts) - 1) if path.ts[k] == path.ts[k + 1] && path.taxpath[k] != path.taxpath[k + 1] && first(ts) < path.ts[k] ≤ last(ts)])
+    stops = sort!(unique!(vcat(first(ts), jumps, last(ts))))
+    times = sort!(unique!(vcat(ts, stops)))
+    indices = [findall(t -> stops[k] ≤ t ≤ stops[k + 1], times) for k in 1:(length(stops) - 1)]
+    problems = [SciMLBase.SDEProblem(dynamicdrift!, dynamicnoise!, [0, firm.a₀, 0], (stops[k], stops[k + 1]), MarkovDynamics(solution, fractions, committed, stops[k + 1])) for k in 1:(length(stops) - 1)]
+    capacity = SciMLBase.DiscreteCallback((u, t, integrator) -> u[2] > firm.η, integrator -> (integrator.u[2] = firm.η); save_positions = (false, false))
+    paths = zeros(typeof(float(firm.a₀)), length(ts), 10, length(φ₀s), trajectories)
+
+    for (j, φ₀) in enumerate(φ₀s)
+        u = [log(φ₀) - log1p(-φ₀), firm.a₀, 0]
+        states = similar(paths, length(times), 3, trajectories)
+        for i in eachindex(problems)
+            problem = SDE.EnsembleProblem(SciMLBase.remake(problems[i]; u0 = u))
+            sol = SDE.solve(problem, SDE.SRIW2(); trajectories, dt = timestep, adaptive = false, seed = seed + j + length(φ₀s) * (i - 1), saveat = times[indices[i]], save_start = true, save_end = true, save_everystep = false, dense = false, callback = capacity)
+
+            for t in ts
+                state = sol(t)
+                row = searchsortedfirst(times, t)
+
+                for l in 1:trajectories
+                    states[row, :, l] .= state[l]
+                end
+            end
+        end
+
+        p = last(problems).p
+        for (tdx, t) in enumerate(ts)
+            row = searchsortedfirst(times, t)
+            us = @view states[row, :, :]
+            side = tdx < length(ts) && ts[tdx + 1] == t ? :left : :right
+            values = [dynamicvalues(u, t, p; side) for u in eachcol(us)]
+            for (vdx, value) in enumerate(values)
+                for column in 1:9
+                    paths[tdx, column, j, vdx] = value[column]
+                end
+
+                paths[tdx, 10, j, vdx] = value[3]
+            end
         end
     end
 

@@ -46,8 +46,9 @@ oddsratio = 0.1
 Δt = 0.25
 nearzeroshare = 0.95
 nshocks = 21
+baselineyear = 2020
 
-cases = ("Baseline learning", "Additional adverse news")
+cases = ("Reputation shock", "Additional adverse news")
 colours = (defaultpalette[:committed], defaultpalette[:damages])
 
 rootdirectory = normpath(joinpath(@__DIR__, "..", ".."))
@@ -56,7 +57,6 @@ plotpath = get(ENV, "PLOTPATH", joinpath(rootdirectory, "figures"))
 solutionfile = get(ENV, "REPUTATION_SOLUTION", "")
 
 ## Load matching equilibria
-
 household, firm, government, signal, climate = initmodels()
 
 validfiles = filter(path -> startswith(basename(path), "noncommitted-simplified-") && endswith(path, ".jld2"), readdir(joinpath(datapath, "solutions"); join = true))
@@ -90,7 +90,8 @@ signal = parameters.signal
 grid = parameters.grid
 horizon = last(baseline.solution.t)
 
-tₛ = baseline.solution.t[argmin(abs.(baseline.solution.t .- min(10, horizon / 4)))]
+shockyear = 9
+tₛ = baseline.solution.t[searchsortedfirst(baseline.solution.t, shockyear)]
 
 matches = filter(equilibrium -> equilibrium.filename != baseline.filename && comparablereputationequilibrium(equilibrium, baseline), equilibria)
 pushfirst!(matches, baseline)
@@ -119,7 +120,7 @@ projections = map(matches) do equilibrium
 end
 
 projection = projections[baseindex]
-eventindex = findfirst(==(tₛ), projection.t)
+eventindex = findfirst(t -> t ≈ tₛ, projection.t)
 ā = projection.abatement[eventindex, 1]
 φ̄ = projection.belief[eventindex, 1]
 j = argmin([abs(physicalstate(grid, 1, j)[2] - ā) for j in 1:size(grid, 2)])
@@ -144,6 +145,7 @@ const regimenames = ("incentive", "announcement-gap", "reputation-wedge")
 
 regimecolours = (CairoMakie.cgrad([defaultpalette[:abatement], background, defaultpalette[:damages]]), CairoMakie.cgrad([background, defaultpalette[:damages]]), CairoMakie.cgrad([defaultpalette[:damages], background, defaultpalette[:abatement]]))
 
+regimefigures = CairoMakie.Figure[]
 for panel in 1:3
     figure = CairoMakie.Figure(size = figuresize, backgroundcolor = background)
     axis = CairoMakie.Axis(figure[1, 1]; xlabel = L"Reputation $\phi$", ylabel = "Abatement / capacity", title = Printf.@sprintf("%s at year %.1f", regimetitles[panel], tₛ), xticks = 0:0.25:1, xtickformat = percenttickformat, ytickformat = percenttickformat)
@@ -160,10 +162,12 @@ for panel in 1:3
 
     panelpath = joinpath(figurepath, "tax-regime-map-$(regimenames[panel])")
     savepublicationfigure(panelpath, figure)
+
+    push!(regimefigures, figure)
 end
 
 regimefigures = [CairoMakie.Figure(size = figuresize, backgroundcolor = background) for _ in 1:3]
-incentiveaxis = CairoMakie.Axis(regimefigures[1][1, 1]; xlabel = "Years since announcement", ylabel = "Abatement / capacity", title = "Where is deviation attractive?", ytickformat = percenttickformat, limits = ((0, horizon), (first(abatementshare), 1)))
+incentiveaxis = CairoMakie.Axis(regimefigures[1][1, 1]; xlabel = L"Year $t$", ylabel = "Abatement / capacity", title = "Where is deviation attractive?", ytickformat = percenttickformat, xtickformat = ts -> map(t -> Printf.@sprintf("%d", t + baselineyear), ts), limits = ((0, horizon), (first(abatementshare), 1)))
 
 announcementtimes = unique(parameters.τᶜ.ts)
 incentivevalues = [(parameters.τᶜ(t; side = :left) - preferred[j]) / taxfactor for t in announcementtimes, j in 1:(length(preferred) - 1)]
@@ -175,10 +179,10 @@ if minimum(incentivevalues) < 0 < maximum(incentivevalues)
     CairoMakie.contour!(incentiveaxis, announcementtimes, abatementshare, incentivevalues; levels = [0], color = defaultpalette[:guide], linewidth = publicationdefault(:guidelinewidth))
 end
 
-poolaxis = CairoMakie.Axis(regimefigures[2][1, 1]; xlabel = "Years since announcement", ylabel = "Share below capacity", title = "Policy at the announcement", ytickformat = percenttickformat, limits = ((0, horizon), (0, 1)))
-wedgeaxis = CairoMakie.Axis(regimefigures[3][1, 1]; xlabel = "Years since announcement", ylabel = "Mean absolute wedge [USD/tCO₂e]", title = "Size of the reputational wedge", limits = ((0, horizon), (0, nothing)))
+poolaxis = CairoMakie.Axis(regimefigures[2][1, 1]; xlabel = L"Year $t$", ylabel = "Share below capacity", title = "Policy at the announcement", ytickformat = percenttickformat, limits = ((0, horizon), (0, 1)), xtickformat = ts -> map(t -> Printf.@sprintf("%d", t + baselineyear), ts))
+wedgeaxis = CairoMakie.Axis(regimefigures[3][1, 1]; xlabel = L"Year $t$", ylabel = "Mean absolute wedge [USD/tCO₂e]", title = "Size of the reputational wedge", limits = ((0, horizon), (0, nothing)), xtickformat = ts -> map(t -> Printf.@sprintf("%d", t + baselineyear), ts))
 
-for case in 1:2
+for case in [1]
     CairoMakie.lines!(incentiveaxis, projection.t, projection.abatement[:, case] ./ firm.η; color = colours[case], linewidth = publicationdefault(:medianlinewidth), label = cases[case])
     for (column, linestyle) in ((2, :solid), (1, :dash))
         shares = [1 - projection.regimes[k, 5, case] > 1e-10 ? projection.regimes[k, column, case] / (1 - projection.regimes[k, 5, case]) : NaN for k in eachindex(projection.t)]
@@ -230,19 +234,23 @@ const transitionnames = ("belief", "policy", "abatement", "emissions")
 
 for panel in 1:4
     figure = CairoMakie.Figure(size = figuresize, backgroundcolor = background)
-    axis = CairoMakie.Axis(figure[1, 1]; xlabel = "Years since announcement", ylabel = transitionlabels[panel], title = transitiontitles[panel], limits = ((0, horizon), nothing))
+    axis = CairoMakie.Axis(figure[1, 1]; xlabel = L"Year $t$", ylabel = transitionlabels[panel], title = transitiontitles[panel], limits = ((0, horizon), nothing), xtickformat = ts -> map(t -> Printf.@sprintf("%d", t + baselineyear), ts))
+
+    CairoMakie.xlims!(axis, 0., floor(horizon))
+    savepublicationfigure(joinpath(figurepath, "skeleton-reputation-transition-$(transitionnames[panel])"), figure)
+
     if panel == 1 || panel == 3
         axis.ytickformat = percenttickformat
         CairoMakie.ylims!(axis, 0, 1)
     end
 
     CairoMakie.vlines!(axis, [tₛ]; color = defaultpalette[:guide], linestyle = :dot, linewidth = publicationdefault(:guidelinewidth))
-    for case in 1:2
+    for case in [1]
         CairoMakie.lines!(axis, projection.t, transitionseries[panel][:, case]; color = colours[case], linewidth = publicationdefault(:medianlinewidth), label = cases[case])
     end
 
     CairoMakie.Legend(figure[2, 1], axis; orientation = :horizontal, tellwidth = false)
-    CairoMakie.Label(figure[0, 1], Printf.@sprintf("Unexpected news at year %.1f: commitment odds fall by %.0f%%", tₛ, 100(1 - oddsratio)); fontsize = publicationdefault(:paneltitlefontsize), tellwidth = false)
+    # CairoMakie.Label(figure[0, 1], Printf.@sprintf("Unexpected news at year %.1f: commitment odds fall by %.0f%%", tₛ, 100(1 - oddsratio)); fontsize = publicationdefault(:paneltitlefontsize), tellwidth = false)
     savepublicationfigure(joinpath(figurepath, "reputation-transition-$(transitionnames[panel])"), figure)
 end
 
@@ -276,7 +284,6 @@ for panel in 1:2
     end
 
     CairoMakie.Label(figure[-1, 1], timingtitles[panel]; fontsize = publicationdefault(:paneltitlefontsize), tellwidth = false)
-    CairoMakie.Label(figure[0, 1], "Point labels: pre-shock baseline emissions [GtCO₂e/year]"; fontsize = publicationdefault(:annotationfontsize), color = defaultpalette[:guide], tellwidth = false)
     CairoMakie.Legend(figure[2, 1], axis; orientation = :horizontal, tellwidth = false)
     savepublicationfigure(joinpath(figurepath, "reputation-shock-timing-$(timingnames[panel])"), figure)
 end
@@ -343,29 +350,39 @@ emissionlevels = reduce(vcat, [reshape(projection.cumulativeemissions[end, :], 1
 completionlevels = reduce(vcat, [reshape(projection.nearzero[end, :], 1, 2) for projection in projections])
 welfarelevels = hcat(uvalues .- u₀, uvalues .+ getproperty.(projections, :welfareloss) .- u₀) .* (100 / ȳ)
 
-if length(matches) > 1
-    comparisonseries = (emissionlevels, completionlevels, welfarelevels)
-    comparisontitles = ("Emissions over the transition", "Probability of near-zero", "Household welfare cost")
-    comparisonlabels = ("Expected cumulative GtCO₂e", Printf.@sprintf("Probability of %.0f%% abatement", 100nearzeroshare), "NPV cost [% of one year's output]")
-    comparisonnames = ("emissions", "near-zero", "welfare")
-    for panel in 1:3
-        figure = CairoMakie.Figure(size = figuresize, backgroundcolor = background)
-        axis = CairoMakie.Axis(figure[1, 1]; xlabel = L"Signal noise $\sigma/\sigma_0$", ylabel = comparisonlabels[panel], title = comparisontitles[panel], xticks = equilibriumσratios)
-        if panel == 2
-            axis.ytickformat = percenttickformat
-            CairoMakie.ylims!(axis, 0, 1)
+xticksσs = map(eq -> eq.solution.parameters.signal.σ, matches)
+
+begin
+    comparisonfigures = CairoMakie.Figure[]
+    if length(matches) > 1
+        comparisonseries = (emissionlevels, completionlevels, welfarelevels)
+        comparisontitles = ("Median cumulative emissions over the transition after reputation shock", "Probability of near-zero", "Household welfare cost")
+        comparisonlabels = ("Expected cumulative GtCO₂e", Printf.@sprintf("Probability of %.0f%% abatement", 100nearzeroshare), "NPV cost [% of one year's output]")
+        comparisonnames = ("emissions", "near-zero", "welfare")
+        for panel in 1:3
+            figure = CairoMakie.Figure(size = figuresize, backgroundcolor = background)
+            axis = CairoMakie.Axis(figure[1, 1]; xlabel = L"Signal noise $\sigma$", ylabel = comparisonlabels[panel], title = comparisontitles[panel], xticks = xticksσs, xtickformat = "{:.2f}", xticklabelrotation = pi/4)
+            
+            if panel == 2
+                axis.ytickformat = percenttickformat
+                CairoMakie.ylims!(axis, 0, 1)
+            elseif panel == 1
+                CairoMakie.ylims!(axis, 50, 80)
+                axis.yticks = 50:5:80
+            end
+
+            for case in [1]
+                CairoMakie.scatterlines!(axis, xticksσs, comparisonseries[panel][:, case]; color = colours[case], linewidth = publicationdefault(:medianlinewidth), markersize = 9, label = cases[case])
+            end
+
+            CairoMakie.Legend(figure[2, 1], axis; orientation = :horizontal, tellwidth = false)
+            savepublicationfigure(joinpath(figurepath, "ets-equilibrium-comparison-$(comparisonnames[panel])"), figure)
+            push!(comparisonfigures, figure)
         end
 
-        for case in 1:2
-            CairoMakie.scatterlines!(axis, equilibriumσratios, comparisonseries[panel][:, case]; color = colours[case], linewidth = publicationdefault(:medianlinewidth), markersize = 9, label = cases[case])
-        end
-
-        CairoMakie.Legend(figure[2, 1], axis; orientation = :horizontal, tellwidth = false)
-        CairoMakie.Label(figure[0, 1], "Market noise, credibility and the transition"; fontsize = publicationdefault(:paneltitlefontsize), tellwidth = false)
-        savepublicationfigure(joinpath(figurepath, "ets-equilibrium-comparison-$(comparisonnames[panel])"), figure)
+    else
+        @info "One matching noise calibration is available; the ETS figure reports the fixed-forecast information channel. Solve and save additional σ calibrations for the equilibrium comparison."
     end
-else
-    @info "One matching noise calibration is available; the ETS figure reports the fixed-forecast information channel. Solve and save additional σ calibrations for the equilibrium comparison."
 end
 
 ## Quantitative summary
@@ -389,7 +406,7 @@ end
 
 open(joinpath(figurepath, "tax-regime-visited.csv"), "w") do file
     println(file, "signalnoise,case,time,phase,capacitymass,intrinsicpoolingmass,observedpoolingmass,reputationaffectedmass,interiorpolicymass,beliefvariance,signedtaxwedge,absolutetaxwedge")
-    for (index, projection) in enumerate(projections), case in 1:2, k in eachindex(projection.t)
+    for (index, projection) in enumerate(projections), case in [1], k in eachindex(projection.t)
         phase = projection.t[k] != tₛ ? "regular" : k > 1 && projection.t[k - 1] == tₛ ? "after" : "before"
         Printf.@printf(file, "%.10g,%s,%.10g,%s,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g,%.10g\n", matches[index].solution.parameters.signal.σ, cases[case], projection.t[k], phase, projection.regimes[k, 5, case], projection.regimes[k, 1, case], projection.regimes[k, 2, case], projection.regimes[k, 3, case], projection.regimes[k, 4, case], projection.learningvariance[k, case], projection.taxwedge[k, 1, case], projection.taxwedge[k, 2, case])
     end
@@ -397,7 +414,7 @@ end
 
 open(joinpath(figurepath, "tax-regime-exposure.csv"), "w") do file
     println(file, "signalnoise,case,yearsbelowcapacity,intrinsicpoolingexposure,observedpoolingexposure,reputationaffectedexposure,averagecapacitymass,maximumrmsbeliefvolatility,meantaxwedgeUSD,meanabsolutetaxwedgeUSD")
-    for (index, projection) in enumerate(projections), case in 1:2
+    for (index, projection) in enumerate(projections), case in [1]
         Δts = diff(projection.t)
         activeyears = sum(Δts .* (1 .- projection.regimes[2:end, 5, case]))
         exposure = [activeyears > 0 ? sum(Δts .* projection.regimes[2:end, column, case]) / activeyears : NaN for column in 1:3]
@@ -412,7 +429,7 @@ end
 
 open(joinpath(figurepath, "reputation-comparison.csv"), "w") do file
     println(file, "signalnoise,case,terminalreputation,terminalabatementshare,cumulativeemissions,probabilitynearzero,npvcostpercentoutput")
-    for (index, projection) in enumerate(projections), case in 1:2
+    for (index, projection) in enumerate(projections), case in [1]
         Printf.@printf(file, "%.10g,%s,%.10g,%.10g,%.10g,%.10g,%.10g\n", matches[index].solution.parameters.signal.σ, cases[case], projection.belief[end, case], projection.abatement[end, case] / firm.η, projection.cumulativeemissions[end, case], projection.nearzero[end, case], welfarelevels[index, case])
     end
 end

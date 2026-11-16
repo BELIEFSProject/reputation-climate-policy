@@ -50,6 +50,7 @@ figuresize = (960, 540)
 Δt = 0.25
 characteristicstep = 0.05
 characteristictolerance = 1e-8
+baselineyear = 2020
 
 rootdirectory = normpath(joinpath(@__DIR__, "..", ".."))
 datapath = get(ENV, "DATAPATH", joinpath(rootdirectory, "data"))
@@ -127,7 +128,7 @@ caseindices = [1, 4]
 trajectoryfigures = CairoMakie.Figure[]
 for panel in eachindex(series)
     figure = CairoMakie.Figure(size = figuresize, backgroundcolor = background)
-    axis = CairoMakie.Axis(figure[1, 1]; xlabel = L"Year $t$", ylabel = labels[panel], title = titles[panel], limits = ((0, horizon), (0, nothing)))
+    axis = CairoMakie.Axis(figure[1, 1]; xlabel = L"Year $t$", ylabel = labels[panel], title = titles[panel], limits = ((0, horizon), (0, nothing)),  xtickformat = ts -> map(t -> Printf.@sprintf("%d", t + baselineyear), ts))
     if panel in (3, 4, 6, 7)
         axis.ytickformat = percenttickformat
     end
@@ -147,7 +148,7 @@ for panel in eachindex(series)
 end
 
 gapfig = CairoMakie.Figure(size = figuresize, backgroundcolor = background)
-gapaxis = CairoMakie.Axis(gapfig[1, 1]; xlabel = "Years since announcement", ylabel = "USD/tCO₂e", title = "Tax shortfall before full abatement", limits = ((0, horizon), (0, nothing)))
+gapaxis = CairoMakie.Axis(gapfig[1, 1]; xlabel = L"Year $t$", ylabel = "USD/tCO₂e", title = "Tax shortfall before full abatement", limits = ((0, horizon), (0, nothing)),  xtickformat = ts -> map(t -> Printf.@sprintf("%d", t + baselineyear), ts))
 for case in 2:3
     CairoMakie.lines!(gapaxis, ts, diagnostics[:, 4, case] ./ taxfactor; color = colours[case + 1], linewidth = publicationdefault(:medianlinewidth), label = cases[case + 1])
 end
@@ -165,7 +166,7 @@ end
 
 for (column, scale, title, ylabel, filename) in zip((4, 5), (firm.η, c(firm)), ("Known-commitment abatement check", "Known-commitment valuation check"), ("Share of abatement capacity", L"$q/c$"), ("benchmark-abatement", "benchmark-valuation"))
     checkfig = CairoMakie.Figure(size = figuresize, backgroundcolor = background)
-    checkaxis = CairoMakie.Axis(checkfig[1, 1]; xlabel = "Years since announcement", ylabel, title, limits = ((0, horizon), (0, nothing)))
+    checkaxis = CairoMakie.Axis(checkfig[1, 1]; xlabel = L"Year $t$", ylabel, title, limits = ((0, horizon), (0, nothing)),  xtickformat = ts -> map(t -> Printf.@sprintf("%d", t + baselineyear), ts))
     if column == 4
         checkaxis.ytickformat = percenttickformat
         CairoMakie.ylims!(checkaxis, 0, 1.02)
