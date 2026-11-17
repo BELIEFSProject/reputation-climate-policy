@@ -1,5 +1,9 @@
 using Test
 
+import Roots
+import ADTypes
+import SHA
+
 import UnPack: @unpack
 import FastClosures: @closure
 import BoundaryValueDiffEq as BVP
@@ -7,7 +11,7 @@ import SciMLBase
 import ForwardDiff as FD
 import QuadGK as QGK
 
-include("../src/primitives/constants.jl")
+include("../src/primitives/calibration.jl")
 include("../src/primitives/signal.jl")
 include("../src/primitives/climate.jl")
 include("../src/agents/households.jl")
@@ -17,6 +21,9 @@ include("../src/solve/model.jl")
 include("../src/dynamics/government.jl")
 include("../src/solve/government/committed.jl")
 include("../src/utils/saving.jl")
+
+calibration = Calibration()
+taxfactor = calibration.taxfactor
 
 testhousehold = Household(; ν = 1.0, ϕ = 1.0, r = 0.1)
 testfirm = Firm(; e₀ = 1.0, a₀ = 0.1, A = 1.0, η = 1.0, κ = 1.0, ξ = 2.0)

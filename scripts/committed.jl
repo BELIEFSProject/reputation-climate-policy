@@ -1,6 +1,12 @@
 ## Setup
 using Revise
 
+import Roots
+import ForwardDiff as FD
+import ADTypes
+import ArgParse
+import SHA
+
 import UnPack: @unpack
 import FastClosures: @closure
 
@@ -10,31 +16,30 @@ import BoundaryValueDiffEq as BVP
 import SciMLBase
 import QuadGK as QGK
 
-includet("../src/primitives/constants.jl")
+includet("../src/primitives/calibration.jl")
 includet("../src/primitives/signal.jl")
 includet("../src/primitives/climate.jl")
-
 includet("../src/agents/households.jl")
 includet("../src/agents/firm.jl")
 includet("../src/agents/government.jl")
-
+includet("../src/solve/model.jl")
 includet("../src/dynamics/government.jl")
 
-includet("../src/solve/model.jl")
 includet("../src/solve/government/committed.jl")
 
 includet("../src/utils/arguments.jl")
 includet("../src/utils/saving.jl")
 
 ## Model
-household, firm, government, signal, climate = initmodels()
+calibration = Calibration()
+household, firm, government, signal, climate = initmodels(; calibration)
 model = Model(household, firm, climate)
 
 ## Solve
-τ₀ = 10 * taxfactor
+τ₀ = 10 * calibration.taxfactor
 intervals = 500
 filename = committedsolutionfilename(model; initialtax = τ₀, intervals)
-filepath = joinpath(@__DIR__, "..", "data", "solutions", filename)
+filepath = joinpath("data", "solutions", filename)
 
 if isfile(filepath)
     error("Committed benchmark already exists at $filepath; preserving the saved solution.")
@@ -47,7 +52,7 @@ taxpath = CommittedTaxPath(solution)
 if isinteractive()
     import Plots
 
-    normalisedtaxpath =  taxpath.taxpath ./ taxfactor
+    normalisedtaxpath =  taxpath.taxpath ./ calibration.taxfactor
 
     fig = Plots.plot(taxpath.ts, normalisedtaxpath; xlabel = "Year", ylabel = "Policy", c = :darkred, xlims = extrema(taxpath.ts), yguidefontcolor = :darkred, label = false, linewidth = 2.5)
 

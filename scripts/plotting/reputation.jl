@@ -2,6 +2,11 @@
 
 using Revise
 
+import Roots
+import ForwardDiff as FD
+import ArgParse
+import SHA
+
 import DotEnv
 import JLD2
 import Printf
@@ -13,26 +18,32 @@ import LaTeXStrings: @L_str
 
 DotEnv.load!()
 
-includet("../../src/primitives/constants.jl")
+includet("../../src/primitives/calibration.jl")
 includet("../../src/primitives/signal.jl")
 includet("../../src/primitives/climate.jl")
-
 includet("../../src/agents/households.jl")
 includet("../../src/agents/firm.jl")
 includet("../../src/agents/government.jl")
-
+includet("../../src/solve/model.jl")
 includet("../../src/dynamics/government.jl")
 
-includet("../../src/solve/model.jl")
-includet("../../src/solve/government/noncommittedmarkov.jl")
-includet("../../src/solve/government/noncommitteddae.jl")
+includet("../../src/solve/government/nc/grid.jl")
+includet("../../src/solve/government/nc/parameters.jl")
+includet("../../src/solve/government/nc/policy.jl")
+includet("../../src/solve/government/nc/operator.jl")
+includet("../../src/solve/government/nc/solve.jl")
 
 includet("../../src/utils/arguments.jl")
 includet("../../src/utils/saving.jl")
 
 includet("publication.jl")
 includet("colours.jl")
-includet("reputationutils.jl")
+includet("common/results.jl")
+includet("common/loading.jl")
+includet("common/projection.jl")
+
+calibration = Calibration()
+taxfactor = calibration.taxfactor
 
 ## Configuration
 
@@ -51,37 +62,14 @@ baselineyear = 2020
 cases = ("Reputation shock", "Additional adverse news")
 colours = (defaultpalette[:committed], defaultpalette[:damages])
 
-rootdirectory = normpath(joinpath(@__DIR__, "..", ".."))
+rootdirectory = pwd()
 datapath = get(ENV, "DATAPATH", joinpath(rootdirectory, "data"))
 plotpath = get(ENV, "PLOTPATH", joinpath(rootdirectory, "figures"))
 solutionfile = get(ENV, "REPUTATION_SOLUTION", "")
 
 ## Load matching equilibria
-household, firm, government, signal, climate = initmodels()
-
-validfiles = filter(path -> startswith(basename(path), "noncommitted-simplified-") && endswith(path, ".jld2"), readdir(joinpath(datapath, "solutions"); join = true))
-sort!(validfiles; by = mtime, rev = true)
-equilibria = filter(!isnothing, loadreputationequilibrium.(validfiles))
-
-if isempty(solutionfile)
-    label = solutionlabel(household, firm, signal, climate)
-    candidates = filter(equilibrium -> solutionlabel(equilibrium.solution.parameters.model.household, equilibrium.solution.parameters.model.firm, equilibrium.solution.parameters.signal, equilibrium.solution.parameters.model.climate) == label && equilibrium.solution.parameters.government == government, equilibria)
-
-    if isempty(candidates)
-        error("No current non-committed equilibrium matches the calibration. Run scripts/noncommitted.jl, or set REPUTATION_SOLUTION to a saved solution file.")
-    end
-
-    baseline = first(candidates)
-else
-    baseline = loadreputationequilibrium(solutionfile)
-    if isnothing(baseline)
-        error("REPUTATION_SOLUTION must contain a current non-committed Markov equilibrium.")
-    end
-
-    if all(equilibrium -> equilibrium.filename != baseline.filename, equilibria)
-        pushfirst!(equilibria, baseline)
-    end
-end
+household, firm, government, signal, climate = initmodels(; calibration)
+baseline, matches = loadequilibria(joinpath(datapath, "solutions"), Model(household, firm, climate), government, signal; filename = solutionfile)
 
 parameters = baseline.solution.parameters
 model = parameters.model
@@ -93,18 +81,7 @@ horizon = last(baseline.solution.t)
 shockyear = 9
 tₛ = baseline.solution.t[searchsortedfirst(baseline.solution.t, shockyear)]
 
-matches = filter(equilibrium -> equilibrium.filename != baseline.filename && comparablereputationequilibrium(equilibrium, baseline), equilibria)
-pushfirst!(matches, baseline)
-matches = unique(equilibrium -> equilibrium.solution.parameters.signal.σ, matches)
-sort!(matches; by = equilibrium -> equilibrium.solution.parameters.signal.σ)
 baseindex = findfirst(equilibrium -> equilibrium.solution.parameters.signal.σ == signal.σ, matches)
-
-for equilibrium in matches
-    p = equilibrium.solution.parameters
-    if maximum(d -> max(d.valuegap, d.bellmangap), equilibrium.solution.diagnostics) > p.tolerance || maximum(d -> d.policygap, equilibrium.solution.diagnostics) > p.policytolerance
-        error("Saved equilibrium residuals exceed tolerance in $(equilibrium.filename). Recompute this equilibrium before plotting.")
-    end
-end
 
 runlabel = join((join(ncsolutionkey.(getproperty.(matches, :solution)), ","), string(φ₀), string(oddsratio), string(Δt), string(nearzeroshare), string(nshocks)), "|")
 figurepath = publicationfigurepath(plotpath, household, firm, model.climate, "reputation", runlabel)
@@ -357,7 +334,7 @@ begin
     if length(matches) > 1
         comparisonseries = (emissionlevels, completionlevels, welfarelevels)
         comparisontitles = ("Median cumulative emissions over the transition after reputation shock", "Probability of near-zero", "Household welfare cost")
-        comparisonlabels = ("Expected cumulative GtCO₂e", Printf.@sprintf("Probability of %.0f%% abatement", 100nearzeroshare), "NPV cost [% of one year's output]")
+        comparisonlabels = ("GtCO₂e", Printf.@sprintf("Probability of %.0f%% abatement", 100nearzeroshare), "NPV cost [% of one year's output]")
         comparisonnames = ("emissions", "near-zero", "welfare")
         for panel in 1:3
             figure = CairoMakie.Figure(size = figuresize, backgroundcolor = background)
@@ -368,14 +345,16 @@ begin
                 CairoMakie.ylims!(axis, 0, 1)
             elseif panel == 1
                 CairoMakie.ylims!(axis, 50, 80)
+                CairoMakie.xlims!(axis, minimum(xticksσs), maximum(xticksσs))
                 axis.yticks = 50:5:80
             end
 
+            savepublicationfigure(joinpath(figurepath, "skeleton-ets-equilibrium-comparison-$(comparisonnames[panel])"), figure)
             for case in [1]
                 CairoMakie.scatterlines!(axis, xticksσs, comparisonseries[panel][:, case]; color = colours[case], linewidth = publicationdefault(:medianlinewidth), markersize = 9, label = cases[case])
             end
 
-            CairoMakie.Legend(figure[2, 1], axis; orientation = :horizontal, tellwidth = false)
+            # CairoMakie.Legend(figure[2, 1], axis; orientation = :horizontal, tellwidth = false)
             savepublicationfigure(joinpath(figurepath, "ets-equilibrium-comparison-$(comparisonnames[panel])"), figure)
             push!(comparisonfigures, figure)
         end

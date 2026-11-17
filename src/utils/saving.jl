@@ -1,5 +1,3 @@
-import SHA
-
 const solutionhashlength = 12
 const ncversion = "behavioural-v1"
 

@@ -4,8 +4,9 @@ struct Household{T} <: AbstractHousehold{T}
     ϕ::T
     r::T
 
-    function Household(; ν::T = defaultν, ϕ::T = defaultϕᴸ, r::T = realhouseholddiscount) where T
-        isone(ϕ) ? LinearHousehold(ν, r) : new{T}(ν, ϕ, r)
+    function Household(; calibration = Calibration(), ν = calibration.ν, ϕ = calibration.ϕ, r = calibration.r)
+        ν, ϕ, r = promote(ν, ϕ, r)
+        isone(ϕ) ? LinearHousehold(ν, r) : new{typeof(ν)}(ν, ϕ, r)
     end
 
     function Household(ν, ϕ, r)
@@ -45,3 +46,5 @@ end
 
 inversefrisch(household::Household) = household.ϕ
 inversefrisch(::LinearHousehold) = 1
+
+Household(calibration::Calibration; kwargs...) = Household(; calibration, kwargs...)

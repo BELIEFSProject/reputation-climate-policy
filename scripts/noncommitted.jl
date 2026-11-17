@@ -1,6 +1,9 @@
 ## Setup
 using Revise
 
+import Roots
+import SHA
+
 import Printf
 import JLD2
 import ArgParse
@@ -15,21 +18,25 @@ import LinearSolve as LS
 import NonlinearSolve as NLS
 import SciMLBase
 
-includet("../src/primitives/constants.jl")
+includet("../src/primitives/calibration.jl")
 includet("../src/primitives/signal.jl")
 includet("../src/primitives/climate.jl")
-
 includet("../src/agents/households.jl")
 includet("../src/agents/firm.jl")
 includet("../src/agents/government.jl")
-
+includet("../src/solve/model.jl")
 includet("../src/dynamics/government.jl")
 
-includet("../src/solve/model.jl")
-includet("../src/solve/government/noncommittedmarkov.jl")
-includet("../src/solve/government/noncommitteddae.jl")
+includet("../src/solve/government/nc/grid.jl")
+includet("../src/solve/government/nc/parameters.jl")
+includet("../src/solve/government/nc/policy.jl")
+includet("../src/solve/government/nc/operator.jl")
+includet("../src/solve/government/nc/solve.jl")
 includet("../src/utils/arguments.jl")
 includet("../src/utils/saving.jl")
+
+calibration = Calibration()
+taxfactor = calibration.taxfactor
 
 ## Arguments
 argumentsettings = parameterargumentsettings()
@@ -46,14 +53,14 @@ end
 arguments = ArgParse.parse_args(ARGS, argumentsettings; as_symbols = true)
 
 ## Model
-household, firm, government, signal, climate = initmodels(arguments)
+household, firm, government, signal, climate = initmodels(arguments; calibration)
 model = Model(household, firm, climate)
 @info "Non-committed preferences" preferredtaxUSD = government.τ̄ / taxfactor curvature = government.κᵇ
 
 ## Announced policy
 committedinitialtax = 10 * taxfactor # Set an inherited tax to anchor the committed announcement.
 committedintervals = 500
-committedfile = joinpath(@__DIR__, "..", "data", "solutions", committedsolutionfilename(model; initialtax = committedinitialtax, intervals = committedintervals))
+committedfile = joinpath("data", "solutions", committedsolutionfilename(model; initialtax = committedinitialtax, intervals = committedintervals))
 if !isfile(committedfile)
     error("Run scripts/committed.jl with the same model and numerical settings first: $committedfile")
 end
@@ -88,7 +95,7 @@ Printf.@printf("Maximum hidden-deviation improvement: %.3e trillion USD-equivale
 
 ## Save
 nckey = ncsolutionkey(ncsolution)
-ncfile = joinpath(@__DIR__, "..", "data", "solutions", "noncommitted-simplified-$(first(last(split(nckey, '/')), solutionhashlength)).jld2")
+ncfile = joinpath("data", "solutions", "noncommitted-simplified-$(first(last(split(nckey, '/')), solutionhashlength)).jld2")
 if isfile(ncfile)
     error("Non-committed result already exists at $ncfile; preserving the saved solution.")
 end

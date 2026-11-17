@@ -1,37 +1,3 @@
-struct ReputationEquilibrium{S}
-    solution::S
-    filename::String
-end
-
-struct ReputationProjection{V, M, R, T}
-    t::V
-    belief::M
-    tax::M
-    expectedtax::M
-    investment::M
-    abatement::M
-    emissions::M
-    cumulativeemissions::M
-    nearzero::M
-    regimes::R
-    taxwedge::R
-    learningvariance::M
-    welfareloss::T
-end
-
-struct ReputationTiming{V, T}
-    t::V
-    progress::V
-    emissions::V
-    terminalabatement::V
-    terminalemissions::V
-    cumulativeemissions::V
-    baselineabatement::T
-    baselineemissions::T
-    baselinecumulativeemissions::T
-    stationary::Bool
-end
-
 "Regimes: intrinsic pooling, near-announcement policy, reputation wedge, interior policy, capacity."
 function reputationtaxregimes(a, τ, mandate, parameters, tolerance)
     household, firm, climate = parameters.model.household, parameters.model.firm, parameters.model.climate
@@ -59,63 +25,6 @@ function reputationtaxdiagnostics(equilibrium, value; tolerance = max(10equilibr
         reputationwedge[i, j] = value.τ[i, j] - min(preferred[j], mandate)
     end
     return preferred, policygap, preferencegap, reputationwedge, regimes
-end
-
-function loadreputationequilibrium(filename)
-    return JLD2.jldopen(filename, "r") do file
-        if !haskey(file, "ncversion") || file["ncversion"] != ncversion || !haskey(file, "noncommitted")
-            return nothing
-        end
-        entries = collect(keys(file["noncommitted"]))
-        if length(entries) != 1
-            return nothing
-        end
-        key = "noncommitted/$(only(entries))"
-        solution = file["$key/solution"]
-        if !(solution.parameters isa NCDAEParameters) || key != ncsolutionkey(solution)
-            return nothing
-        end
-        return ReputationEquilibrium(solution, abspath(filename))
-    end
-end
-
-"Find the saved Ramsey solution that generated this equilibrium's announcement."
-function loadreputationbenchmark(equilibrium, directory)
-    parameters = equilibrium.solution.parameters
-    files = filter(path -> startswith(basename(path), "committed-simplified-") && endswith(path, ".jld2"), readdir(directory; join = true))
-    sort!(files; by = mtime, rev = true)
-    for filename in files
-        benchmark = JLD2.jldopen(filename, "r") do file
-            if !haskey(file, "committedtaxpath") || !haskey(file, "committed/solution")
-                return nothing
-            end
-            path = file["committedtaxpath"]
-            if path.ts != parameters.τᶜ.ts || path.taxpath != parameters.τᶜ.taxpath || path.tailtax != parameters.τᶜ.tailtax
-                return nothing
-            end
-            solution = file["committed/solution"]
-            model = solution.model
-            if solutionlabel(model.household, model.firm, model.climate) != solutionlabel(parameters.model.household, parameters.model.firm, parameters.model.climate)
-                return nothing
-            end
-            if !SciMLBase.successful_retcode(solution.retcode)
-                error("The matching committed benchmark has return code $(solution.retcode): $filename")
-            end
-            return solution
-        end
-        if !isnothing(benchmark)
-            return benchmark
-        end
-    end
-    error("No saved committed benchmark matches the equilibrium's model and announced policy in $directory.")
-end
-
-function comparablereputationequilibrium(equilibrium, baseline)
-    parameters, reference = equilibrium.solution.parameters, baseline.solution.parameters
-    sameeconomy = solutionlabel(parameters.model.household, parameters.model.firm, parameters.model.climate) == solutionlabel(reference.model.household, reference.model.firm, reference.model.climate)
-    sameannouncement = parameters.τᶜ.ts == reference.τᶜ.ts && parameters.τᶜ.taxpath == reference.τᶜ.taxpath && parameters.τᶜ.tailtax == reference.τᶜ.tailtax
-    samenumerics = parameters.grid.h == reference.grid.h && parameters.timestep == reference.timestep && parameters.tolerance == reference.tolerance && parameters.policytolerance == reference.policytolerance && equilibrium.solution.t == baseline.solution.t
-    return sameeconomy && sameannouncement && samenumerics && parameters.signal.ϵ == reference.signal.ϵ && parameters.government == reference.government
 end
 
 function reputationweights(grid, φ, a)
@@ -293,9 +202,6 @@ function projectreputation(equilibrium; initialbelief = 0.75, losstime = 10.0, o
     parameters = solution.parameters
     household, firm, grid = parameters.model.household, parameters.model.firm, parameters.grid
     horizon = last(solution.t)
-    if !(0 < initialbelief < 1 && 0 < losstime < horizon && 0 < oddsratio < 1 && timestep > 0 && 0 < nearzeroshare ≤ 1)
-        throw(ArgumentError("The prior, news date, odds ratio, projection step and abatement threshold must be admissible."))
-    end
     timeprecision = 32eps(typeof(horizon)) * max(1, horizon)
     mesh = sort!(unique!(vcat(collect(range(0, horizon; length = ceil(Int, horizon / timestep) + 1)), solution.t, parameters.τᶜ.ts, losstime)))
     mesh = sort!(unique!([isapprox(t, losstime; rtol = 0, atol = timeprecision) ? losstime : t for t in mesh]))

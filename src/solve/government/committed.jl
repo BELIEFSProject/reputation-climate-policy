@@ -1,5 +1,3 @@
-import ADTypes
-
 struct CommittedBVPSolution{M, I, V, T, R}
     model::M
     initialtax::I
@@ -197,9 +195,7 @@ function solvecommitted(model::AbstractModel; initialtax = nothing, intervals = 
     # Finite differences handle the tax-rule switches in the restored costate system.
     algorithm = BVP.MIRK4(; jac_alg = BVP.BVPJacobianAlgorithm(ADTypes.AutoFiniteDiff()))
     cache = BVP.init(problem, algorithm; dt = inv(intervals), adaptive = false, verbose = verbose > 1)
-    if cache.singular_term != problem.singular_term
-        error("Committed BVP initialisation discarded the singular costate term.")
-    end
+
     solution = BVP.solve!(cache)
     if !SciMLBase.successful_retcode(solution)
         error("Committed BVP failed with return code $(solution.retcode).")

@@ -1,6 +1,12 @@
 ## Setup
 using Revise
 
+import Roots
+import ForwardDiff as FD
+import ADTypes
+import ArgParse
+import SHA
+
 import FastClosures: @closure
 
 import DotEnv
@@ -17,20 +23,22 @@ import OrdinaryDiffEq as ODE
 
 DotEnv.load!()
 
-includet("../../src/primitives/constants.jl")
+includet("../../src/primitives/calibration.jl")
 includet("../../src/primitives/signal.jl")
 includet("../../src/primitives/climate.jl")
-
 includet("../../src/agents/households.jl")
 includet("../../src/agents/firm.jl")
 includet("../../src/agents/government.jl")
-
+includet("../../src/solve/model.jl")
 includet("../../src/dynamics/government.jl")
 
-includet("../../src/solve/model.jl")
 includet("../../src/solve/government/committed.jl")
-includet("../../src/solve/government/noncommittedmarkov.jl")
-includet("../../src/solve/government/noncommitteddae.jl")
+includet("../../src/dynamics/ramsey.jl")
+includet("../../src/solve/government/nc/grid.jl")
+includet("../../src/solve/government/nc/parameters.jl")
+includet("../../src/solve/government/nc/policy.jl")
+includet("../../src/solve/government/nc/operator.jl")
+includet("../../src/solve/government/nc/solve.jl")
 includet("../../src/dynamics/committed.jl")
 
 includet("../../src/utils/arguments.jl")
@@ -38,7 +46,12 @@ includet("../../src/utils/saving.jl")
 
 includet("publication.jl")
 includet("colours.jl")
-includet("reputationutils.jl")
+includet("common/results.jl")
+includet("common/loading.jl")
+includet("common/projection.jl")
+
+calibration = Calibration()
+taxfactor = calibration.taxfactor
 
 ## Configuration
 background = Colors.colorant"#FAFAFA"
@@ -52,31 +65,14 @@ characteristicstep = 0.05
 characteristictolerance = 1e-8
 baselineyear = 2020
 
-rootdirectory = normpath(joinpath(@__DIR__, "..", ".."))
+rootdirectory = pwd()
 datapath = get(ENV, "DATAPATH", joinpath(rootdirectory, "data"))
 plotpath = get(ENV, "PLOTPATH", joinpath(rootdirectory, "figures"))
 solutionfile = get(ENV, "REPUTATION_SOLUTION", nothing)
 
 ## Load the saved equilibrium
-household, firm, government, signal, climate = initmodels()
-
-if isnothing(solutionfile)
-    validfiles = filter(path -> startswith(basename(path), "noncommitted-simplified-") && endswith(path, ".jld2"), readdir(joinpath(datapath, "solutions"); join = true))
-    sort!(validfiles; by = mtime, rev = true)
-    equilibria = filter(!isnothing, loadreputationequilibrium.(validfiles))
-    label = solutionlabel(household, firm, signal, climate)
-    candidates = filter(equilibrium -> solutionlabel(equilibrium.solution.parameters.model.household, equilibrium.solution.parameters.model.firm, equilibrium.solution.parameters.signal, equilibrium.solution.parameters.model.climate) == label && equilibrium.solution.parameters.government == government, equilibria)
-    if isempty(candidates)
-        error("No saved non-committed equilibrium matches the calibration. Set REPUTATION_SOLUTION to select a saved file.")
-    end
-
-    baseline = first(candidates)
-else
-    baseline = loadreputationequilibrium(solutionfile)
-    if isnothing(baseline)
-        error("REPUTATION_SOLUTION must contain a current non-committed Markov equilibrium.")
-    end
-end
+household, firm, government, signal, climate = initmodels(; calibration)
+baseline, matches = loadequilibria(joinpath(datapath, "solutions"), Model(household, firm, climate), government, signal; filename = solutionfile)
 
 parameters = baseline.solution.parameters
 model = parameters.model
@@ -94,25 +90,7 @@ mkpath(figurepath)
 benchmark = loadreputationbenchmark(baseline, joinpath(datapath, "solutions"))
 ts, paths, diagnostics = simulatecommitment(baseline; initialbelief = φ₀, timestep = Δt, diagnostics = true)
 characteristic = simulatecharacteristic(baseline.solution, ts; timestep = characteristicstep, tolerance = characteristictolerance)
-benchmarkvalues = zeros(eltype(ts), length(ts), 10)
-
-for (k, t) in enumerate(ts)
-    if t < benchmark.stoppingtime
-        index = min(searchsortedlast(benchmark.t, t), length(benchmark.t) - 1)
-        weight = (t - benchmark.t[index]) / (benchmark.t[index + 1] - benchmark.t[index])
-        a = clamp((1 - weight) * benchmark.a[index] + weight * benchmark.a[index + 1], firm.a₀, firm.η)
-        q = (1 - weight) * benchmark.q[index] + weight * benchmark.q[index + 1]
-    else
-        a, q = firm.η, c(firm)
-    end
-
-    side = k < length(ts) && ts[k + 1] == t ? :left : :right
-    τ = parameters.τᶜ(t; side)
-    nₜ = n(τ, a, household, firm)
-    eₜ = e(nₜ, a, firm)
-    cumulative = k == 1 ? 0 : benchmarkvalues[k - 1, 10] + (t - ts[k - 1]) * eₜ
-    benchmarkvalues[k, :] .= (1, τ, τ, a, q, max(q - c(firm), 0) / firm.ξ, nₜ, y(nₜ, firm), eₜ, cumulative)
-end
+benchmarkvalues = ramsey(benchmark, parameters.τᶜ, ts)
 
 cases = ("Committed", "Full information", "Markov", "Non-committed")
 colours = (defaultpalette[:committed], defaultpalette[:abatement], defaultpalette[:guide], defaultpalette[:damages])

@@ -1,5 +1,3 @@
-import ArgParse
-
 function parameterargumentsettings()
     settings = ArgParse.ArgParseSettings(description = "Model parameter overrides.")
 
@@ -97,21 +95,22 @@ function parameterkwargs(parsed, fields)
     return kwargs
 end
 
-initmodels(args = ARGS) = initmodels(parseparameterarguments(args))
+initmodels(args = ARGS; calibration = Calibration()) = initmodels(parseparameterarguments(args); calibration)
+initmodels(calibration::Calibration) = initmodels(String[]; calibration)
 
-function initmodels(parsed::AbstractDict)
+function initmodels(parsed::AbstractDict; calibration = Calibration())
     firmkwargs = parameterkwargs(parsed, (:e₀, :a₀, :A, :η, :κ, :ξ))
-    firm = Firm(; firmkwargs...)
+    firm = Firm(; calibration, firmkwargs...)
     householdkwargs = parameterkwargs(parsed, (:ν, :ϕ, :r))
-    household = Household(; householdkwargs...)
+    household = Household(; calibration, householdkwargs...)
     governmentkwargs = parameterkwargs(parsed, (:κᵇ, :τ̄))
     if haskey(governmentkwargs, :τ̄)
-        governmentkwargs[:τ̄] *= taxfactor
+        governmentkwargs[:τ̄] *= calibration.taxfactor
     end
-    government = Government(; governmentkwargs...)
+    government = Government(; calibration, governmentkwargs...)
 
-    signal = Signal(; parameterkwargs(parsed, (:ϵ, :σ))...)
-    climate = Climate(; parameterkwargs(parsed, (:γ, ))...)
+    signal = Signal(; calibration, parameterkwargs(parsed, (:ϵ, :σ))...)
+    climate = Climate(; calibration, parameterkwargs(parsed, (:γ, ))...)
 
     return household, firm, government, signal, climate
 end

@@ -1,10 +1,14 @@
-import Roots
-import ForwardDiff as FD
-
-Base.@kwdef struct Government{T <: Real}
-    κᵇ::T = defaultκᵇ
-    τ̄::T = defaultτ̄
+struct Government{T <: Real}
+    κᵇ::T
+    τ̄::T
 end
+
+function Government(; calibration = Calibration(), κᵇ = calibration.κᵇ, τ̄ = calibration.τ̄)
+    return Government(promote(κᵇ, τ̄)...)
+end
+
+Government(calibration::Calibration; kwargs...) = Government(; calibration, kwargs...)
+
 
 "Signed behavioural cost relative to the conjectured policy, held fixed during a hidden deviation."
 behaviouralcost(τ̂, τ, government::Government) = government.κᵇ * (τ̂ - τ) * ((τ̂ + τ) / 2 - government.τ̄)

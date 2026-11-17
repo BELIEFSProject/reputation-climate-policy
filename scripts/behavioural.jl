@@ -1,24 +1,33 @@
 ## Setup
 using Revise
 
+import Roots
+import ArgParse
+
 import Printf
 
-includet("../src/primitives/constants.jl")
+includet("../src/primitives/calibration.jl")
 includet("../src/primitives/signal.jl")
 includet("../src/primitives/climate.jl")
 includet("../src/agents/households.jl")
 includet("../src/agents/firm.jl")
 includet("../src/agents/government.jl")
+includet("../src/solve/model.jl")
+includet("../src/dynamics/government.jl")
+
 includet("../src/utils/arguments.jl")
 
+calibration = Calibration()
+taxfactor = calibration.taxfactor
+
 ## Calibration
-household, firm, government, signal, climate = initmodels()
+household, firm, government, signal, climate = initmodels(; calibration)
 output = y(n(0, firm.a₀, household, firm), firm)
 
 # Counterfactual private utility gain; it is neither an equilibrium payment nor a resource cost.
-τreference = defaultdeviationtax
-taxcut = defaultdeviationcut
-benefitshare = defaultdeviationbenefit
+τreference = calibration.deviationtax
+taxcut = calibration.deviationcut
+benefitshare = calibration.deviationbenefit
 κᵇ = benefitshare * output / (taxcut * (τreference - government.τ̄ - taxcut / 2))
 if !isfinite(κᵇ) || κᵇ ≤ 0
     error("The calibration cut must reduce the distance from the preferred tax.")

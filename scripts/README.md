@@ -45,7 +45,7 @@ The script sets `tolerance = policytolerance = 1e-6` for the normalised residual
 
 Implicit steps use Newton with backtracking. The line search explicitly uses a forward-mode Jacobian-vector product; its default analytic-Jacobian helper would otherwise allocate a dense square work array despite the main sparse Jacobian. If Newton fails, the same equations are retried from its best iterate using a trust region, at the same tolerance and with a fresh sparse Jacobian at every retry iteration. A failed retry still stops the solve. The iteration log includes both attempts.
 
-The committed solver is `src/solve/government/committed.jl`. The current non-committed solver is `src/solve/government/noncommitteddae.jl`; `noncommittedmarkov.jl` supplies its shared grid, value representation, filtering moments and initial values. Legacy parameter structs are retained to read saved solutions; their inactive fields are not calibration options.
+The committed solver is `src/solve/government/committed.jl`. The non-committed implementation is in `src/solve/government/nc/`, with its dependencies explicitly listed by each script. The unused legacy temporal-scheme parameter struct has been removed.
 
 Non-committed function and variable names use `nc`: the solver entry point is `solvencdae`, the script result is `ncsolution`, and saved-solution keys are computed by `ncsolutionkey`. Filenames, JLD2 group names and existing type names are retained for compatibility with saved results.
 
@@ -60,3 +60,42 @@ julia --project=. scripts/plotting/dynamic.jl
 Use `julia --project=. scripts/plotting/calibration.jl` for figures of the current calibration alone; no saved equilibrium is required.
 
 See `scripts/plotting/README.md` for the experiments, saved-equilibrium selection and figure outputs.
+
+## Shared implementation
+
+```text
+src/solve/government/nc/
+    grid.jl                         state grid and solution representations
+    parameters.jl                   numerical scales
+    policy.jl                       hidden Hamiltonian and tax rule
+    operator.jl                     generator, residual and Jacobian
+    solve.jl                        implicit backward solve
+src/dynamics/
+    ramsey.jl                       Ramsey observables shared by plots
+    markov/types.jl                  named FieldVector states and observables
+    markov/observables.jl            observables, μ! and σ!
+    markov/ensemble.jl               stochastic ensemble simulation
+scripts/plotting/common/
+    results.jl                      projection result representations
+    loading.jl                      common equilibrium selection
+    projection.jl                   forward projection maths
+```
+
+Each script lists its dependencies directly using paths relative to its own directory: for example, `includet("../src/utils/arguments.jl")` in `scripts/` and `includet("../../src/utils/arguments.jl")` in `scripts/plotting/`. Tests likewise use file-relative `include` paths. Include-only entry points remain removed; include paths use neither `abspath` nor `@__DIR__`. Parameter-range prechecks have been removed; genuine solver-failure reporting, economic control constraints and the singular-term check remain. Unsupported committed closed forms still report their elasticity restriction. Saved equilibrium types remain compatible; the unused legacy temporal-scheme type and the simulation parameter wrapper have been removed. Dynamic plots rerun ensembles rather than caching paths. Existing data files are left untouched.
+
+Stochastic states use `MarkovState <: StaticArrays.FieldVector` with fields `z`, `a`, `m`. Observables use `MarkovObservables <: FieldVector`, retaining both named fields and the existing column indexing. Heterogeneous simulation parameters use `MarkovParameters` with named fields rather than positional tuple entries.
+
+## Calibration objects and package imports
+
+All package imports belong to the calling scripts or tests. Files under `src/` define the model and numerical methods without importing packages.
+
+`src/primitives/calibration.jl` replaces the former global constants with one immutable `Calibration` object:
+
+```julia
+calibration = Calibration(ξ = 3, σ = 0.19)
+household, firm, government, signal, climate = initmodels(calibration)
+```
+
+Individual primitives also accept the object, for example `Firm(calibration)` and `Household(calibration)`. In a research script, edit its `calibration = Calibration()` line; `initmodels(; calibration)` additionally applies command-line overrides. CLI preferred-tax values remain in USD/tCO₂e, while `Calibration(τ̄ = ...)` uses model units, as do the primitive constructors.
+
+Dependent defaults are recomputed when constructing a calibration: changing `y₀` updates `A`, `ν`, emissions intensity and the cost calibration. Explicit keyword values override those defaults. CLI overrides retain the existing behaviour of overriding individual primitives without refitting the other calibration targets. The primitive and saved-solution representations are unchanged, so existing model files and their parameter-based identities remain usable.

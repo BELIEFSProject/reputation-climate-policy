@@ -1,13 +1,20 @@
 abstract type AbstractFirm{T <: Real} end
 
-Base.@kwdef struct Firm{T} <: AbstractFirm{T}
-    e₀::T = e₀
-    a₀::T = a₀
-    A::T = defaultA
-    η::T = defaultηᴱ
-    κ::T = defaultκ
-    ξ::T = defaultξ
+struct Firm{T} <: AbstractFirm{T}
+    e₀::T
+    a₀::T
+    A::T
+    η::T
+    κ::T
+    ξ::T
 end
+
+function Firm(; calibration = Calibration(), e₀ = calibration.e₀, a₀ = calibration.a₀, A = calibration.A, η = calibration.η, κ = calibration.κ, ξ = calibration.ξ)
+    return Firm(promote(e₀, a₀, A, η, κ, ξ)...)
+end
+
+Firm(calibration::Calibration; kwargs...) = Firm(; calibration, kwargs...)
+
 
 function y(n, firm::Firm)
     n * firm.A

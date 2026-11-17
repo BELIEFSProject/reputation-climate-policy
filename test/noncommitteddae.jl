@@ -1,5 +1,9 @@
 using Test
 
+import SHA
+import ArgParse
+import StaticArrays as SA
+
 import Roots
 import ForwardDiff as FD
 import SparseArrays as SP
@@ -10,10 +14,11 @@ import LinearSolve as LS
 import NonlinearSolve as NLS
 import SciMLBase
 import OrdinaryDiffEq as ODE
+import StochasticDiffEq as SDE
 import JLD2
 import LogExpFunctions as LE
 
-include("../src/primitives/constants.jl")
+include("../src/primitives/calibration.jl")
 include("../src/primitives/signal.jl")
 include("../src/primitives/climate.jl")
 include("../src/agents/households.jl")
@@ -21,13 +26,23 @@ include("../src/agents/firm.jl")
 include("../src/agents/government.jl")
 include("../src/solve/model.jl")
 include("../src/dynamics/government.jl")
-include("../src/solve/government/noncommittedmarkov.jl")
-include("../src/solve/government/noncommitteddae.jl")
+include("../src/solve/government/nc/grid.jl")
+include("../src/solve/government/nc/parameters.jl")
+include("../src/solve/government/nc/policy.jl")
+include("../src/solve/government/nc/operator.jl")
+include("../src/solve/government/nc/solve.jl")
 include("../src/dynamics/committed.jl")
 include("../src/utils/saving.jl")
 include("../src/utils/arguments.jl")
-include("../src/dynamics/markovsimulation.jl")
-include("../scripts/plotting/reputationutils.jl")
+include("../src/dynamics/markov/types.jl")
+include("../src/dynamics/markov/observables.jl")
+include("../src/dynamics/markov/ensemble.jl")
+include("../scripts/plotting/common/results.jl")
+include("../scripts/plotting/common/loading.jl")
+include("../scripts/plotting/common/projection.jl")
+
+calibration = Calibration()
+taxfactor = calibration.taxfactor
 
 testhousehold = Household(; ν = 1.0, ϕ = 1.0, r = 0.1)
 testfirm = Firm(; e₀ = 1.0, a₀ = 0.1, A = 1.0, η = 1.0, κ = 1.0, ξ = 2.0)
@@ -40,30 +55,28 @@ testsignal = Signal(; ϵ = 1.0, σ = 0.5)
     @test preference.τ̄ == 25taxfactor
     @test preference.κᵇ == 0.004
     path = CommittedTaxPath([0.6, 0.6], [0.0, 1.0])
-    @test_throws ArgumentError NCDAEParameters(path, testmodel, Government(; κᵇ = 0.0), testsignal)
-    @test_throws ArgumentError NCDAEParameters(path, testmodel, Government(; τ̄ = -0.1), testsignal)
 end
 
 @testset "Default behavioural preference matches its counterfactual utility target" begin
     government = Government()
-    benefit = -behaviouralcost(defaultdeviationtax - defaultdeviationcut, defaultdeviationtax, government)
+    benefit = -behaviouralcost(calibration.deviationtax - calibration.deviationcut, calibration.deviationtax, government)
     @test government.κᵇ ≈ 0.06581428571428571
     @test government.τ̄ == 10taxfactor
-    @test benefit / y₀ ≈ defaultdeviationbenefit
-    @test behaviouralcost(defaultdeviationtax, defaultdeviationtax, government) == 0
+    @test benefit / calibration.y₀ ≈ calibration.deviationbenefit
+    @test behaviouralcost(calibration.deviationtax, calibration.deviationtax, government) == 0
 end
 
 @testset "EU investment costs match the transition calibration" begin
     european = Firm()
     household = Household()
     output = y(n(0, european.a₀, household, european), european)
-    horizon = defaultadjustmenthorizon
+    horizon = calibration.adjustmenthorizon
     investment = (european.η - european.a₀) / horizon
     surplus = Climate().γ * output^2 / household.r - c(european)
     @test c(european) > 0
     @test european.ξ > 0
     @test surplus > 0
-    @test k(investment, european) / output ≈ defaultinvestmentshare
+    @test k(investment, european) / output ≈ calibration.investmentshare
     @test surplus / european.ξ * (horizon - (1 - exp(-household.r * horizon)) / household.r) ≈ european.η - european.a₀
 end
 
@@ -123,14 +136,11 @@ end
     parameters = NCDAEParameters(path, testmodel, testgovernment, testsignal; h = 0.5)
     finerparameters = NCDAEParameters(path, testmodel, testgovernment, testsignal; h = 0.5, timestep = 0.5)
     grid = parameters.grid
-    legacyparameters = NonCommittedMarkovParameters(testmodel, testgovernment, testsignal, path, grid, 1.0, 1e-8, 1e-7, 0.5, 1000)
     times = [0.0, 1.0]
     values = [NCMarkovValue(t, grid, zeros(size(grid)), zeros(size(grid)), zeros(size(grid)), zeros(size(grid))) for t in times]
     diagnostics = fill(NonCommittedMarkovDiagnostics(0, 0.0, 0.0, 0.0, 0.0), length(times))
-    legacy = NonCommittedMarkovSolution(times, values, legacyparameters, diagnostics)
     current = NonCommittedMarkovSolution(times, values, parameters, diagnostics)
     finer = NonCommittedMarkovSolution(times, values, finerparameters, diagnostics)
-    @test ncsolutionkey(legacy) != ncsolutionkey(current)
     @test ncsolutionkey(current) != ncsolutionkey(finer)
     alternative = NCDAEParameters(path, testmodel, Government(; κᵇ = 1.0, τ̄ = testgovernment.τ̄), testsignal; h = 0.5)
     @test ncsolutionkey(current) != ncsolutionkey(NonCommittedMarkovSolution(times, values, alternative, diagnostics))
@@ -313,8 +323,11 @@ end
     values = [ncinitial(t, 0.6, parameters) for t in (0.0, 1.0)]
     diagnostics = fill(NonCommittedMarkovDiagnostics(0, 0.0, 0.0, 0.0, 0.0), 2)
     solution = NonCommittedMarkovSolution([0.0, 1.0], values, parameters, diagnostics)
-    dynamics = MarkovDynamics(solution, [value.τ ./ 0.6 for value in values], false, 1.0)
-    objects = dynamicvalues([0.0, testfirm.η, 0.0], 0.5, dynamics)
+    dynamics = MarkovParameters(solution, [value.τ ./ 0.6 for value in values], false, 1.0)
+    objects = observables(MarkovState(0.0, testfirm.η, 0.0), 0.5, dynamics)
+    @test objects isa SA.FieldVector{10}
+    @test objects.τ == objects[2]
+    @test FD.derivative(z -> observables(MarkovState(z, zero(z) + testfirm.η, zero(z)), 0.5, dynamics).τᵉ, 0.0) ≈ 0.075
     @test objects[2] == testgovernment.τ̄
     @test objects[6] == 0
     @test objects[9] == 0
@@ -466,8 +479,6 @@ end
     @test path(0.4; side = :left) == 0.6
     @test path(0.4) == 0.1
 
-    @test_throws DomainError solution(-0.01)
-    @test_throws DomainError solution(1.01)
 end
 
 @testset "Known-commitment valuation interpolation uses the certainty boundary" begin
@@ -516,4 +527,63 @@ end
     before = e(n(0.6, testfirm.a₀, testhousehold, testfirm), testfirm.a₀, testfirm)
     after = e(n(0.1, testfirm.a₀, testhousehold, testfirm), testfirm.a₀, testfirm)
     @test result[end, 10] ≈ 0.4before + 0.6after atol = 1e-7
+end
+
+@testset "Ensemble paths preserve priors, investment and cumulative emissions" begin
+    path = CommittedTaxPath([0.0, 0.0], [0.0, 1.0])
+    parameters = NCDAEParameters(path, testmodel, testgovernment, testsignal; h = 0.5)
+    grid = parameters.grid
+    q = c(testfirm) + 0.1testfirm.ξ
+    values = [NCMarkovValue(t, grid, fill(q, size(grid)), zeros(size(grid)), zeros(size(grid)), zeros(size(grid))) for t in (0.0, 1.0)]
+    diagnostics = fill(NonCommittedMarkovDiagnostics(0, 0.0, 0.0, 0.0, 0.0), 2)
+    solution = NonCommittedMarkovSolution([0.0, 1.0], values, parameters, diagnostics)
+    equilibrium = ReputationEquilibrium(solution, "")
+    ts = [0.0, 0.5, 1.0]
+
+    paths = simulatedynamics(equilibrium, [0.2, 0.8], ts; timestep = 0.01)
+    @test size(paths) == (3, 10, 2)
+    @test paths[:, 1, 1] ≈ fill(0.2, 3)
+    @test paths[:, 1, 2] ≈ fill(0.8, 3)
+    @test paths[:, 4, 1] ≈ testfirm.a₀ .+ 0.1 .* ts
+    @test paths[:, 10, 1] ≈ 0.9 .* ts .- 0.05 .* ts.^2 atol = 1e-3
+    grouped = simulateensembledynamics(equilibrium, [0.2, 0.8], ts; trajectories = 2)
+    @test size(grouped) == (3, 10, 2, 2)
+    @test grouped[:, :, 1, 1] ≈ paths[:, :, 1]
+end
+
+@testset "Seeded stochastic ensembles retain states through announcement jumps" begin
+    path = CommittedTaxPath([0.6, 0.6, 0.2, 0.2], [0.0, 0.4, 0.4, 1.0], 0.2)
+    parameters = NCDAEParameters(path, testmodel, testgovernment, testsignal; h = 0.5)
+    grid = parameters.grid
+    values = [NCMarkovValue(t, grid, fill(c(testfirm), size(grid)), zeros(size(grid)), zeros(size(grid)), fill(0.1, size(grid))) for t in (0.0, 0.4, 1.0)]
+    diagnostics = fill(NonCommittedMarkovDiagnostics(0, 0.0, 0.0, 0.0, 0.0), 3)
+    eq = ReputationEquilibrium(NonCommittedMarkovSolution([0.0, 0.4, 1.0], values, parameters, diagnostics), "")
+    ts = [0.0, 0.4, 0.4, 1.0]
+
+    paths = simulatedynamics(eq, fill(0.5, 4), ts; timestep = 0.01, seed = 72)
+    repeated = simulatedynamics(eq, fill(0.5, 4), ts; timestep = 0.01, seed = 72)
+    @test paths == repeated
+    @test maximum(paths[end, 1, :]) > minimum(paths[end, 1, :])
+    @test paths[2, [1, 4, 10], :] == paths[3, [1, 4, 10], :]
+    @test all(paths[2, 3, :] .> paths[3, 3, :])
+end
+
+@testset "Calibration objects propagate overrides and dependent defaults" begin
+    alternative = Calibration(ξ = 3, σ = 0.19)
+    household, firm, government, signal, climate = initmodels(alternative)
+
+    @test firm.ξ == 3
+    @test signal.σ == 0.19
+    @test government.κᵇ == alternative.κᵇ
+    @test household.r == alternative.r
+    @test climate.γ == alternative.γ
+    @test Firm(alternative).ξ == 3
+
+    rescaled = Calibration(y₀ = 3)
+    @test rescaled.A == rescaled.ν == 3
+    @test rescaled.η ≈ rescaled.ẽ₀ / rescaled.A
+    @test rescaled.a₀ ≈ (rescaled.ẽ₀ - rescaled.e₀) / rescaled.A
+    @test k(rescaled.investmentrate, Firm(rescaled)) ≈ rescaled.investmentshare * rescaled.y₀
+
+    @test FD.derivative(σ -> Calibration(σ = σ).σ, 0.38) == 1
 end

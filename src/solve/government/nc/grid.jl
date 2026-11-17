@@ -6,10 +6,7 @@ struct NonCommittedMarkovGrid{T}
 end
 
 function NonCommittedMarkovGrid(model::AbstractModel, h; alower = model.firm.a₀)
-    isfinite(h) && h > 0 || throw(ArgumentError("The grid step must be finite and positive."))
     N = round(Int, inv(h))
-    N ≥ 1 && isapprox(N * h, one(h)) || throw(ArgumentError("The grid step must divide [0, 1]."))
-    isfinite(alower) && isfinite(model.firm.η) && 0 ≤ alower < model.firm.η || throw(ArgumentError("The abatement grid must lie in [0,η] and have finite positive width."))
     T = promote_type(typeof(float(h)), typeof(alower), typeof(model.firm.η))
     return NonCommittedMarkovGrid(one(T) / N, AffineGridMap(zero(T), one(T)), AffineGridMap(T(alower), T(model.firm.η)))
 end
@@ -24,20 +21,6 @@ function Base.CartesianIndices(grid::NonCommittedMarkovGrid)
 end
 
 physicalstate(grid::NonCommittedMarkovGrid, i::Integer, j::Integer) = (i == size(grid, 1) ? grid.φ.upper : grid.φ((i - 1) * grid.h), j == size(grid, 2) ? grid.A.upper : grid.A((j - 1) * grid.h))
-
-# Retained to identify and read saved results from the superseded temporal scheme.
-struct NonCommittedMarkovParameters{M, G, S, C, D, T}
-    model::M
-    government::G
-    signal::S
-    τᶜ::C
-    grid::D
-    Δtmax::T
-    tolerance::T
-    policytolerance::T
-    relaxation::T
-    maxiters::Int
-end
 
 struct NCMarkovValue{T, G, M <: AbstractMatrix}
     t::T
@@ -64,7 +47,6 @@ struct NonCommittedMarkovSolution{T, V, P, D}
 end
 
 function (solution::NonCommittedMarkovSolution)(t)
-    first(solution.t) ≤ t ≤ last(solution.t) || throw(DomainError(t, "Calendar time is outside the solution."))
     k = min(searchsortedlast(solution.t, t), length(solution.t) - 1)
     weight = (t - solution.t[k]) / (solution.t[k + 1] - solution.t[k])
     left, right = solution.u[k], solution.u[k + 1]

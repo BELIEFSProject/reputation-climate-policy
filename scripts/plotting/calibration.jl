@@ -1,6 +1,10 @@
 ## Setup
 using Revise
 
+import Roots
+import ArgParse
+import SHA
+
 import DotEnv
 import Printf
 import Colors
@@ -9,13 +13,14 @@ import LaTeXStrings: @L_str
 
 DotEnv.load!()
 
-includet("../../src/primitives/constants.jl")
+includet("../../src/primitives/calibration.jl")
 includet("../../src/primitives/signal.jl")
 includet("../../src/primitives/climate.jl")
-
 includet("../../src/agents/households.jl")
 includet("../../src/agents/firm.jl")
 includet("../../src/agents/government.jl")
+includet("../../src/solve/model.jl")
+includet("../../src/dynamics/government.jl")
 
 includet("../../src/utils/arguments.jl")
 includet("../../src/utils/saving.jl")
@@ -23,19 +28,22 @@ includet("../../src/utils/saving.jl")
 includet("publication.jl")
 includet("colours.jl")
 
+calibration = Calibration()
+taxfactor = calibration.taxfactor
+
 ## Configuration
 background = Colors.colorant"#FAFAFA"
 figuresize = (960, 540)
 CairoMakie.set_theme!(publicationtheme)
 CairoMakie.update_theme!(backgroundcolor = background, Axis = (; backgroundcolor = background), Legend = (; backgroundcolor = background))
 
-referencehorizon = defaultadjustmenthorizon # Constant-rate calibration reference, not the Ramsey stopping time.
+referencehorizon = calibration.adjustmenthorizon # Constant-rate calibration reference, not the Ramsey stopping time.
 τmax = 250. # USD/tCO₂e.
 
-rootdirectory = normpath(joinpath(@__DIR__, "..", ".."))
+rootdirectory = pwd()
 plotpath = get(ENV, "PLOTPATH", joinpath(rootdirectory, "figures"))
 
-household, firm, government, signal, climate = initmodels()
+household, firm, government, signal, climate = initmodels(; calibration)
 label = join(("calibration-v2", solutionlabel(household, firm, signal, climate), governmentlabel(government), parameterstring(referencehorizon), parameterstring(τmax)), "_")
 figurepath = publicationfigurepath(plotpath, household, firm, climate, "primitives", label)
 mkpath(figurepath)
