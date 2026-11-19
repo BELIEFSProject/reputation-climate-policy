@@ -5,7 +5,7 @@ struct Household{T} <: AbstractHousehold{T}
     r::T
 
     function Household(; ν::T = defaultν, ϕ::T = defaultφᴸ, r::T = realhouseholddiscount) where T
-        isone(ϕ) ? LinearHousehold(ν, r) : new{T}(ν, ϕ, r)
+        (ϕ ≈ 1) ? LinearHousehold(ν, r) : new{T}(ν, ϕ, r)
     end
 
     function Household(ν, ϕ, r)
