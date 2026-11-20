@@ -2,26 +2,6 @@ function parameterargumentsettings()
     settings = ArgParse.ArgParseSettings(description = "Model parameter overrides.")
 
     ArgParse.@add_arg_table! settings begin
-        "--e0", "--e₀"
-            arg_type = Float64
-            dest_name = "e₀"
-            default = nothing
-            help = "Baseline emissions."
-        "--a0", "--a₀"
-            arg_type = Float64
-            dest_name = "a₀"
-            default = nothing
-            help = "Benchmark abatement."
-        "--kappa", "--κ"
-            arg_type = Float64
-            dest_name = "κ"
-            default = nothing
-            help = "Marginal abatement cost slope."
-        "--xi", "--ξ"
-            arg_type = Float64
-            dest_name = "ξ"
-            default = nothing
-            help = "Investment-rate adjustment cost."
         "--nu", "--ν"
             arg_type = Float64
             dest_name = "ν"
@@ -37,11 +17,16 @@ function parameterargumentsettings()
             dest_name = "A"
             default = nothing
             help = "Total factor productivity."
-        "--emissions-intensity", "--eta-E", "--ηᴱ"
+        "--energy-share", "--alpha", "--α"
             arg_type = Float64
-            dest_name = "η"
+            dest_name = "α"
             default = nothing
-            help = "Emissions intensity of output."
+            help = "CES energy share."
+        "--substitution", "--rho", "--ρ"
+            arg_type = Float64
+            dest_name = "ρ"
+            default = nothing
+            help = "CES substitution parameter."
         "--discount", "--r"
             arg_type = Float64
             dest_name = "r"
@@ -99,7 +84,7 @@ initmodels(args = ARGS; calibration = Calibration()) = initmodels(parseparameter
 initmodels(calibration::Calibration) = initmodels(String[]; calibration)
 
 function initmodels(parsed::AbstractDict; calibration = Calibration())
-    firmkwargs = parameterkwargs(parsed, (:e₀, :a₀, :A, :η, :κ, :ξ))
+    firmkwargs = parameterkwargs(parsed, (:A, :α, :ρ))
     firm = Firm(; calibration, firmkwargs...)
     householdkwargs = parameterkwargs(parsed, (:ν, :ϕ, :r))
     household = Household(; calibration, householdkwargs...)

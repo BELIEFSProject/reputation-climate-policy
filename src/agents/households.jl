@@ -4,7 +4,8 @@ struct Household{T} <: AbstractHousehold{T}
     ϕ::T
     r::T
 
-    function Household(; ν::T = defaultν, ϕ::T = defaultφᴸ, r::T = realhouseholddiscount) where T
+    function Household(; calibration = Calibration(), ν::T = calibration.ν,
+                       ϕ::T = calibration.ϕ, r::T = calibration.r) where T
         (ϕ ≈ 1) ? LinearHousehold(ν, r) : new{T}(ν, ϕ, r)
     end
 
@@ -47,3 +48,14 @@ inversefrisch(household::Household) = household.ϕ
 inversefrisch(::LinearHousehold) = 1
 
 Household(calibration::Calibration; kwargs...) = Household(; calibration, kwargs...)
+
+"Unconstrained labour-market-clearing condition at energy-labour ratio `z`."
+function unconstrainedlabour(z, household::LinearHousehold, firm, r, deltaL)
+    (firm.A * (1 - firm.α) * f(z, firm)^((1 - firm.ρ) / firm.ρ) /
+     (household.ν * (1 + r * deltaL)))
+end
+
+function unconstrainedlabour(z, household::Household, firm, r, deltaL)
+    (firm.A * (1 - firm.α) * f(z, firm)^((1 - firm.ρ) / firm.ρ) /
+     (household.ν * (1 + r * deltaL)))^inv(household.ϕ)
+end
