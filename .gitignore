@@ -355,7 +355,7 @@ TSWLatexianTemp*
 #*Notes.bib
 
 .vscode
-papers
+paper
 figures
 data
 *.code-workspace
