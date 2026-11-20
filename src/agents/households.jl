@@ -50,12 +50,26 @@ inversefrisch(::LinearHousehold) = 1
 Household(calibration::Calibration; kwargs...) = Household(; calibration, kwargs...)
 
 "Unconstrained labour-market-clearing condition at energy-labour ratio `z`."
-function unconstrainedlabour(z, household::LinearHousehold, firm, r, deltaL)
-    (firm.A * (1 - firm.α) * f(z, firm)^((1 - firm.ρ) / firm.ρ) /
-     (household.ν * (1 + r * deltaL)))
+function unconstrainedlabour(z, household::LinearHousehold, firm::CESFirm, r, deltaL)
+    firm.A * (1 - firm.α) * f(z, firm)^((1 - firm.ρ) / firm.ρ) / (household.ν * (1 + r * deltaL))
 end
 
-function unconstrainedlabour(z, household::Household, firm, r, deltaL)
-    (firm.A * (1 - firm.α) * f(z, firm)^((1 - firm.ρ) / firm.ρ) /
-     (household.ν * (1 + r * deltaL)))^inv(household.ϕ)
+function unconstrainedlabour(z, household::LinearHousehold, firm::CobbDouglasFirm, r, deltaL)
+    firm.A * (1 - firm.α) * z^firm.α / (household.ν * (1 + r * deltaL))
+end
+
+function unconstrainedlabour(z, household::LinearHousehold, firm::LeontiefFirm, r, deltaL)
+    error("The Leontief labour supply at an interior energy-labour ratio is not unique.")
+end
+
+function unconstrainedlabour(z, household::Household, firm::CESFirm, r, deltaL)
+    (firm.A * (1 - firm.α) * f(z, firm)^((1 - firm.ρ) / firm.ρ) / (household.ν * (1 + r * deltaL)))^inv(household.ϕ)
+end
+
+function unconstrainedlabour(z, household::Household, firm::CobbDouglasFirm, r, deltaL)
+    (firm.A * (1 - firm.α) * z^firm.α / (household.ν * (1 + r * deltaL)))^inv(household.ϕ)
+end
+
+function unconstrainedlabour(z, household::Household, firm::LeontiefFirm, r, deltaL)
+    error("The Leontief labour supply at an interior energy-labour ratio is is not unique.")
 end

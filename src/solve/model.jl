@@ -8,7 +8,7 @@ span(grid::AffineGridMap) = grid.upper - grid.lower
 normalise(x, grid::AffineGridMap) = (x - grid.lower) / span(grid)
 
 "General-equilibrium model with household, production, energy, banking and belief objects."
-struct GeneralEquilibriumModel{H, F, D, CN, C, B, S, G}
+struct GeneralEquilibriumModel{H, F, D, CN, C, B, S, G, U}
     household::H
     firm::F
     dirty::D
@@ -17,6 +17,7 @@ struct GeneralEquilibriumModel{H, F, D, CN, C, B, S, G}
     bank::B
     signal::S
     government::G
+    υ::U
 end
 
 function GeneralEquilibriumModel(calibration::Calibration)
@@ -28,6 +29,5 @@ function GeneralEquilibriumModel(calibration::Calibration)
     bank = Bank(calibration)
     signal = Signal(calibration)
     government = Government(calibration)
-    GeneralEquilibriumModel(household, firm, dirty, clean, climate, bank,
-                            signal, government)
+    GeneralEquilibriumModel(household, firm, dirty, clean, climate, bank, signal, government, calibration.υ)
 end

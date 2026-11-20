@@ -5,11 +5,11 @@ struct Bank{T <: Real} <: AbstractBank{T}
     θ::T
     κₗ::T
     κᵈ::T
+    δL::T
 end
 
-function Bank(; calibration = Calibration(), k̄ = calibration.k̄,
-              θ = calibration.θ, κₗ = calibration.κₗ, κᵈ = calibration.κᵈᵇ)
-    Bank(promote(k̄, θ, κₗ, κᵈ)...)
+function Bank(; calibration = Calibration(), k̄ = calibration.k̄, θ = calibration.θ, κₗ = calibration.κₗ, κᵈ = calibration.κᵈᵇ, δL = calibration.δL)
+    Bank(promote(k̄, θ, κₗ, κᵈ, δL)...)
 end
 
 Bank(calibration::Calibration; kwargs...) = Bank(; calibration, kwargs...)
