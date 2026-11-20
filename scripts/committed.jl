@@ -1,7 +1,13 @@
 ## Setup
 import Roots
-import Optim
 import Printf
+import StaticArrays
+
+import ADTypes
+import SciMLBase
+import BoundaryValueDiffEq
+import QuadGK
+import Optim
 
 include("../src/primitives/calibration.jl")
 include("../src/primitives/signal.jl")
@@ -13,77 +19,29 @@ include("../src/agents/banking.jl")
 include("../src/agents/government.jl")
 include("../src/solve/equilibrium.jl")
 include("../src/solve/model.jl")
-
-struct CommittedAllocation{T}
-    z::T
-    n::T
-    ω::T
-    p::T
-    x::T
-    xd::T
-    xc::T
-    y::T
-    L::T
-    barL::T
-    μ::T
-    vd::T
-    q::T
-    xc_dot::T
-    welfare::T
-end
-
-function committedallocation(model, xc, vd, tax)
-    firm = model.firm
-    firm isa CESFirm || error("The initial committed solver supports CESFirm only.")
-    household = model.household
-    dirty = model.dirty
-    clean = model.clean
-    barL = lendinglimit(vd, model.bank)
-    n(z) = labour(z, barL, household, firm, model.bank.δL, household.r)
-    residual(z) = z * n(z) - xc - dirtysupply(z, n(z), tax, household, firm, dirty)
-    z = Roots.find_zero(residual, (0.05, 5.0), Roots.Brent())
-    labourlevel = n(z)
-    wagelevel = wage(z, labourlevel, household)
-    price = energyprice(z, labourlevel, household, firm)
-    dirtylevel = dirtyoutput(price, tax, dirty)
-    demand = energydemand(z, labourlevel)
-    output = y(labourlevel, z, firm)
-    liquiditylevel = liquidity(z, labourlevel, household, firm, model.bank.δL)
-    shadow = max(shadowcost(z, labourlevel, household, firm, model.bank.δL, household.r), zero(tax))
-    marginalvalue = price / household.r
-    investment = cleaninvestment(marginalvalue, clean)
-    welfare = welfarecost(labourlevel, dirtylevel, investment, xc, output, household, dirty, clean, model.υ, model.climate.γ)
-    CommittedAllocation(z, labourlevel, wagelevel, price, demand, dirtylevel, xc, output, liquiditylevel, barL, shadow, vd, marginalvalue, investment, welfare)
-end
-
-function stationarydirtyvalue(model, xc, tax)
-    residual(vd) = begin
-        allocation = committedallocation(model, xc, vd, tax)
-        vd - dirtyvalue(allocation.p, tax, allocation.xd, model.household.r, model.dirty)
-    end
-    vd = Roots.find_zero(residual, (0.0, 5.0), Roots.Brent())
-    allocation = committedallocation(model, xc, vd, tax)
-    allocation
-end
+include("../src/solve/committedallocation.jl")
+include("../src/solve/committed.jl")
 
 calibration = Calibration()
 model = GeneralEquilibriumModel(calibration)
 xc0 = 0.40
+options = CommittedOptions()
 
-reference = stationarydirtyvalue(model, xc0, 0.15)
-Printf.@printf("Reference allocation: z=%.6f n=%.6f p=%.6f xd=%.6f L=%.6f barL=%.6f mu=%.6f vd=%.6f q=%.6f investment=%.6f welfare=%.6f\n", reference.z, reference.n, reference.p, reference.xd, reference.L, reference.barL, reference.μ, reference.vd, reference.q, reference.xc_dot, reference.welfare)
+## Solve
+# Known committed type (φ₀ = 1); concentrate policy nodes near the start of the transition.
+taxgrid = collect(range(0, 1; length=5)) .^ 2
+initialtax = fill(0.15, length(taxgrid))
+committed = solvecommitted(model, xc0, taxgrid, initialtax; options)
+path = committed.path
+diagnostics = committed.diagnostics
 
-objective(tax) = begin
-    allocation = stationarydirtyvalue(model, xc0, tax[1])
-    allocation.welfare / model.household.r
-end
-
-result = Optim.optimize(objective, [0.0], [1.0 / model.dirty.η], [0.15], Optim.Fminbox(Optim.BFGS()))
-optimalallocation = stationarydirtyvalue(model, xc0, Optim.minimizer(result)[1])
-optimaltax = Optim.minimizer(result)[1]
-
-if !Optim.converged(result)
-    error("Committed constant-policy optimisation did not converge.")
-end
-
-Printf.@printf("Committed constant-policy tax=%.6f z=%.6f n=%.6f p=%.6f xd=%.6f vd=%.6f q=%.6f investment=%.6f discounted-cost=%.6f\n", optimaltax, optimalallocation.z, optimalallocation.n, optimalallocation.p, optimalallocation.xd, optimalallocation.vd, optimalallocation.q, optimalallocation.xc_dot, Optim.minimum(result))
+## Diagnostics
+initial = committedallocation(path, 0.0)
+terminal = committedallocation(path, 1.0)
+Printf.@printf("Committed schedule candidate: converged=%s, discounted welfare cost=%.8f, schedule KKT=%.3e\n", string(Optim.converged(committed.optimisation)), path.cost, diagnostics.schedulekkt)
+Printf.@printf("Initial allocation: xc=%.6f q=%.6f vd=%.6f p=%.6f xd=%.6f investment=%.6f\n", initial.xc, initial.q, initial.vd, initial.p, initial.xd, initial.investment)
+Printf.@printf("Terminal allocation: xc=%.6f q=%.6f vd=%.6f p=%.6f xd=%.6f investment=%.3e\n", terminal.xc, terminal.q, terminal.vd, terminal.p, terminal.xd, diagnostics.tailinvestment)
+Printf.@printf("Terminal drift checks: price=%.3e profit=%.3e; quadrature error=%.3e\n", diagnostics.tailpricedrift, diagnostics.tailprofitdrift, path.quadratureerror)
+Printf.@printf("Residuals: market=%.3e credit=%.3e complementarity=%.3e investment KKT=%.3e irreversibility=%.3e boundary=%.3e clean PV=%.3e dirty PV=%.3e\n", diagnostics.market, diagnostics.credit, diagnostics.complementarity, diagnostics.investmentkkt, diagnostics.irreversibility, diagnostics.boundary, diagnostics.cleanvaluation, diagnostics.dirtyvaluation)
+Printf.@printf("Dirty-sector checks: utilisation KKT=%.3e interior profit identity=%.3e; minimum q=%.3e minimum vd=%.3e\n", diagnostics.dirtykkt, diagnostics.interiorprofit, diagnostics.minimumq, diagnostics.minimumvd)
+display(hcat(options.horizon .* path.problem.tax.grid, path.problem.tax.values))
