@@ -19,6 +19,8 @@ import QuadGK as QGK
 includet("../src/primitives/calibration.jl")
 includet("../src/primitives/signal.jl")
 includet("../src/primitives/climate.jl")
+
+includet("../src/agents/energy.jl")
 includet("../src/agents/households.jl")
 includet("../src/agents/firm.jl")
 includet("../src/agents/government.jl")

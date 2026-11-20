@@ -24,7 +24,7 @@ const publicationtheme = CairoMakie.Theme(
     ),
     Legend = (;
         labelsize = 13,
-        framevisible = false,
+        framevisible = true,
     ),
 )
 

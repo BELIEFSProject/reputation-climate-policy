@@ -1,63 +1,19 @@
 abstract type AbstractFirm{T <: Real} end
 
 struct Firm{T} <: AbstractFirm{T}
-    e₀::T
-    a₀::T
-    A::T
-    η::T
-    κ::T
-    ξ::T
+    A::T # Total factor poductivity
+    α::T # Energy share
+    ρ::T # CES elasticity of substitution
 end
 
-function Firm(; calibration = Calibration(), e₀ = calibration.e₀, a₀ = calibration.a₀, A = calibration.A, η = calibration.η, κ = calibration.κ, ξ = calibration.ξ)
-    return Firm(promote(e₀, a₀, A, η, κ, ξ)...)
+function F(n, x, firm::Firm)
+    @unpack A, α, ρ = firm
+
+    return A * (α * x^ρ + (1 - α) * n^ρ)^inv(ρ)
 end
 
-Firm(calibration::Calibration; kwargs...) = Firm(; calibration, kwargs...)
+function f(z, firm::Firm)
+    @unpack α, ρ = firm
 
-
-function y(n, firm::Firm)
-    n * firm.A
+    return 1 + α * (z^ρ - 1)
 end
-
-function emissivity(a, firm::Firm)
-    max(firm.η - a, 0)
-end
-function emissivity′(a, firm)
-    ifelse(firm.η > a, -1, 0)
-end
-
-"Firm's wage offer"
-function ω(τ, a, firm::Firm)
-    firm.A * (1 - emissivity(a, firm) * τ)
-end
-function ∂ₐω(τ, a, firm::Firm)
-    -firm.A * τ * emissivity′(a, firm)
-end
-
-function e(n, a, firm::Firm)
-    emissivity(a, firm) * y(n, firm)
-end
-
-# Constant installation price in the simplified model.
-c(firm::Firm) = firm.κ * firm.a₀
-k(ȧ, firm::Firm) = c(firm) * ȧ + firm.ξ * ȧ^2 / 2
-
-## Equilibrium
-"Equilibrium labour demand given tax `τ` and abatement `a`."
-function n(τ, a, household::AbstractHousehold, firm::Firm)
-    wage = ω(τ, a, firm)
-    n(max(wage, zero(wage)), household)
-end
-
-function ∂ₐn(τ, a, household::Household, firm::Firm)
-    ω(τ, a, firm) ≤ 0 && return zero(τ + a)
-    n′(ω(τ, a, firm), household) * ∂ₐω(τ, a, firm)
-end
-
-function ∂ₐn(τ, a, household::LinearHousehold, firm::Firm)
-    ω(τ, a, firm) ≤ 0 && return zero(τ + a)
-    n′(household) * ∂ₐω(τ, a, firm)
-end
-
-α(q, firm::Firm) = max(q - c(firm), zero(q)) / firm.ξ

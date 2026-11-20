@@ -4,9 +4,8 @@ struct Household{T} <: AbstractHousehold{T}
     ϕ::T
     r::T
 
-    function Household(; calibration = Calibration(), ν = calibration.ν, ϕ = calibration.ϕ, r = calibration.r)
-        ν, ϕ, r = promote(ν, ϕ, r)
-        isone(ϕ) ? LinearHousehold(ν, r) : new{typeof(ν)}(ν, ϕ, r)
+    function Household(; ν::T = defaultν, ϕ::T = defaultφᴸ, r::T = realhouseholddiscount) where T
+        (ϕ ≈ 1) ? LinearHousehold(ν, r) : new{T}(ν, ϕ, r)
     end
 
     function Household(ν, ϕ, r)
