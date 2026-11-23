@@ -86,18 +86,18 @@ end
 
 
 "Recover an allocation at a policy-selected input ratio without another market-clearing solve."
-function committedallocationat(model, xᶜ, vᵈ, q, z, τ)
+function committedallocationat(model, xᶜ, vᵈ, q, z, τ; geometry=nothing)
     @unpack household, firm, bank, dirty = model
     r = household.r
 
     barL = lendinglimit(vᵈ, bank)
-    labourlevel = labour(z, barL, household, firm, bank.δᴸ, r)
+    labourlevel = isnothing(geometry) ? labour(z, barL, household, firm, bank.δᴸ, r) : geometry.n
 
     wagelevel = wage(z, labourlevel, household)
-    price = energyprice(z, labourlevel, household, firm)
+    price = isnothing(geometry) ? energyprice(z, labourlevel, household, firm) : geometry.p
     dirtylevel = dirtyoutput(price, τ, dirty)
-    demand = energydemand(z, labourlevel)
-    output = y(labourlevel, z, firm)
+    demand = isnothing(geometry) ? energydemand(z, labourlevel) : geometry.x
+    output = isnothing(geometry) ? y(labourlevel, z, firm) : geometry.y
 
     liquiditylevel = liquidity(z, labourlevel, household, firm, model.bank.δᴸ)
     shadow = max(shadowcost(z, labourlevel, household, firm, model.bank.δᴸ, r), zero(price))
@@ -106,7 +106,9 @@ function committedallocationat(model, xᶜ, vᵈ, q, z, τ)
     welfare = welfarecost(labourlevel, dirtylevel, investment, xᶜ, output, household, dirty, model.clean, model.υ, model.climate.γ)
     profit = dirtyprofit(price, τ, dirtylevel, dirty)
 
-    CommittedAllocation(promote(z, labourlevel, wagelevel, price, demand, dirtylevel, xᶜ, output, liquiditylevel, barL, shadow, vᵈ, q, investment, welfare, profit)...)
+    T = promote_type(typeof(price), typeof(welfare), typeof(profit), typeof(xᶜ), typeof(vᵈ), typeof(q))
+
+    CommittedAllocation{T}(z, labourlevel, wagelevel, price, demand, dirtylevel, xᶜ, output, liquiditylevel, barL, shadow, vᵈ, q, investment, welfare, profit)
 end
 
 "Tax sufficient to shut dirty production at every feasible subsequent clean capacity."

@@ -5,7 +5,8 @@ import StaticArrays
 
 import ADTypes
 import SciMLBase
-import BoundaryValueDiffEq
+import SciMLLogging
+import BoundaryValueDiffEq as BVD
 import QuadGK
 import Roots
 
@@ -31,8 +32,9 @@ includet("../src/solve/committed/solve.jl")
 
 calibration = Calibration()
 model = GeneralEquilibriumModel(calibration)
-xᶜ₀ = 0.40
-options = CommittedOptions()
+xᶜ₀ = 0.
+# Set solverlogging=true for detailed nonlinear iterations; loginterval controls progress frequency.
+options = CommittedOptions(; verbose=true, solverlogging=false, loginterval=5.0, nodes = 20, tolerance = 1e-3)
 
 ## Solve
 # Known committed type (φ₀ = 1); policy is selected from the state–costate Hamiltonian.
@@ -50,7 +52,7 @@ Printf.@printf("Committed canonical candidate: retcode=%s, discounted welfare co
 Printf.@printf("Initial allocation: xc=%.6f q=%.6f vd=%.6f p=%.6f xd=%.6f investment=%.6f\n", initial.xᶜ, initialstate.q, initialstate.vᵈ, initial.p, initial.xᵈ, initial.investment)
 Printf.@printf("Initial costates: lambda_xc=%.6f lambda_q=%.3e lambda_vd=%.3e\n", initialstate.λxᶜ, initialstate.λq, initialstate.λvᵈ)
 Printf.@printf("Stationary tail: tax=%.6f xc=%.6f q=%.6f vd=%.6f p=%.6f xd=%.6f investment=%.3e\n", tailpolicy.tax, terminalstate.xᶜ, terminalstate.q, terminalstate.vᵈ, terminal.p, terminal.xᵈ, diagnostics.tailinvestment)
-Printf.@printf("Hamiltonian checks: policy KKT=%.3e tail KKT=%.3e candidate margin=%.3e singular points=%d investment-boundary points=%d\n", diagnostics.hamiltoniankkt, diagnostics.tailhamiltoniankkt, diagnostics.candidatemargin, diagnostics.singularpoints, diagnostics.investmentboundarypoints)
+Printf.@printf("Hamiltonian checks: policy KKT=%.3e tail KKT=%.3e boundary gap=%.3e tail boundary gap=%.3e singular points=%d investment-boundary points=%d\n", diagnostics.hamiltoniankkt, diagnostics.tailhamiltoniankkt, diagnostics.boundarygap, diagnostics.tailboundarygap, diagnostics.singularpoints, diagnostics.investmentboundarypoints)
 Printf.@printf("Scaled canonical defect per year=%.3e\n", diagnostics.canonical)
 Printf.@printf("Endpoint checks: boundary=%.3e initial complementarity=%.3e terminal complementarity=%.3e tax jump=%.3e price jump=%.3e\n", diagnostics.boundary, diagnostics.initialcomplementarity, diagnostics.tailcomplementarity, diagnostics.taxjump, diagnostics.pricejump)
 Printf.@printf("Residuals: market=%.3e credit=%.3e credit complementarity=%.3e investment KKT=%.3e dirty KKT=%.3e irreversibility=%.3e\n", diagnostics.market, diagnostics.credit, diagnostics.complementarity, diagnostics.investmentkkt, diagnostics.dirtykkt, diagnostics.irreversibility)

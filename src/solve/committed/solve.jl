@@ -5,6 +5,39 @@ Base.@kwdef struct CommittedOptions{T}
     tolerance::T = 1e-8
     tailtolerance::T = 1e-5
     initialtax::T = 0.15
+    verbose::Bool = true
+    solverlogging::Bool = false
+    loginterval::T = 5.0
+end
+
+"Thread-safe counters for throttled collocation progress; never used to select the policy."
+struct CommittedProgress
+    dynamics::Base.Threads.Atomic{Int}
+    boundaries::Base.Threads.Atomic{Int}
+    active::Base.Threads.Atomic{Bool}
+    started::UInt64
+    lastlog::Base.Threads.Atomic{UInt64}
+    interval::UInt64
+end
+
+function CommittedProgress(started, interval)
+    CommittedProgress(Base.Threads.Atomic{Int}(0), Base.Threads.Atomic{Int}(0), Base.Threads.Atomic{Bool}(true), started, Base.Threads.Atomic{UInt64}(started), UInt64(round(1e9 * interval)))
+end
+
+committedprogress!(::Nothing, phase) = nothing
+function committedprogress!(progress::CommittedProgress, phase)
+    progress.active[] || return nothing
+    counter = phase === :dynamics ? progress.dynamics : progress.boundaries
+    evaluations = Base.Threads.atomic_add!(counter, 1) + 1
+    evaluations % 64 == 0 || return nothing
+
+    now = time_ns()
+    previous = progress.lastlog[]
+    if now - previous >= progress.interval && Base.Threads.atomic_cas!(progress.lastlog, previous, now) == previous
+        @info "Committed BVP evaluations" elapsed=(now - progress.started) / 1e9 dynamics=progress.dynamics[] boundaries=progress.boundaries[]
+    end
+
+    return nothing
 end
 
 "Six canonical variables and three constant terminal-constraint multipliers."
@@ -25,12 +58,16 @@ struct CommittedState{T} <: StaticArrays.FieldVector{9, T}
     ψⁱ::T
 end
 
-struct CommittedTransition{M, T}
+StaticArrays.similar_type(::Type{<:CommittedState}, ::Type{T}, ::StaticArrays.Size{(9,)}) where {T} = CommittedState{T}
+
+struct CommittedTransition{M, T, G, P}
     model::M
     horizon::T
     xᶜ₀::T
     initialtax::T
     scale::CommittedState{T}
+    policyguess::G
+    progress::P
 end
 
 struct CommittedPath{P, S, T}
@@ -54,7 +91,8 @@ struct CommittedDiagnostics{T}
     canonical::T
     hamiltoniankkt::T
     tailhamiltoniankkt::T
-    candidatemargin::T
+    boundarygap::T
+    tailboundarygap::T
     initialcomplementarity::T
     tailcomplementarity::T
     tailinvestment::T
@@ -72,73 +110,144 @@ struct CommittedSolution{P, D}
     diagnostics::D
 end
 
-committedstate(state, problem::CommittedTransition) = CommittedState((state .* problem.scale)...)
-committedcomplementarity(a, b) = hypot(a, b) - a - b
+function committedstate(state::AbstractVector, problem::CommittedTransition)
+    scale = problem.scale
+    T = promote_type(eltype(state), eltype(scale))
 
-function committedpolicy(state::CommittedState, problem::CommittedTransition; tail=false, trial=false)
-    @unpack model, scale = problem
-
-    # Newton iterates may leave the economic domain; accepted paths use unprojected states.
-    xᶜ = trial ? max(state.xᶜ, eps(scale.xᶜ)) : state.xᶜ
-    vᵈ = trial ? max(state.vᵈ, zero(state.vᵈ)) : state.vᵈ
-
-    tail && return committedpolicy(model, xᶜ, vᵈ, min(state.q, model.clean.c), state.ψq, state.ψvᵈ)
-    committedpolicy(model, xᶜ, vᵈ, state.q, state.λq, state.λvᵈ)
+    CommittedState{T}(state[1] * scale.xᶜ, state[2] * scale.q, state[3] * scale.vᵈ, state[4] * scale.λxᶜ, state[5] * scale.λq, state[6] * scale.λvᵈ, state[7] * scale.ψq, state[8] * scale.ψvᵈ, state[9] * scale.ψⁱ)
 end
 
-function committedpolicy(path::CommittedPath, s; tail=false)
+committedcomplementarity(a, b) = hypot(a, b) - a - b
+
+function committedpolicy(state::CommittedState, problem::CommittedTransition, s)
+    committedpolicy(problem.model, state.xᶜ, state.vᵈ, state.q, state.λq, state.λvᵈ; zguess=problem.policyguess(s))
+end
+
+function committedpolicy(path::CommittedPath, s)
     state = committedstate(path.solution(s), path.problem)
 
-    committedpolicy(state, path.problem; tail)
+    committedpolicy(state, path.problem, s)
 end
 
 committedallocation(path::CommittedPath, s) = committedpolicy(path, s).allocation
-committedtail(path::CommittedPath) = committedpolicy(path, 1.0; tail=true)
 
-function committeddynamics(state, problem, s)
+function committedtail(path::CommittedPath)
+    problem = path.problem
+    state = committedstate(last(path.solution.u), problem)
+
+    committedpolicy(problem.model, state.xᶜ, state.vᵈ, min(state.q, problem.model.clean.c), state.ψq, state.ψvᵈ; zguess=problem.policyguess(one(problem.horizon)))
+end
+
+"Freeze the previous policy branch as a deterministic, interpolated root reference."
+function committedpolicyguess(path::CommittedPath)
+    grid = path.solution.t
+    ratios = map(s -> committedpolicy(path, s).allocation.z, grid)
+
+    guess = @closure s -> begin
+        i = clamp(searchsortedlast(grid, s), firstindex(grid), lastindex(grid) - 1)
+        weight = clamp((s - grid[i]) / (grid[i + 1] - grid[i]), zero(s), one(s))
+        (1 - weight) * ratios[i] + weight * ratios[i + 1]
+    end
+
+    guess
+end
+
+function committeddynamics!(du, u, problem::CommittedTransition, s)
     @unpack model, horizon, scale = problem
+    committedprogress!(problem.progress, :dynamics)
 
-    physical = committedstate(state, problem)
-    policy = committedpolicy(physical, problem; trial=true)
+    xᶜ = u[1] * scale.xᶜ
+    q = u[2] * scale.q
+    vᵈ = u[3] * scale.vᵈ
+    λxᶜ = u[4] * scale.λxᶜ
+    λq = u[5] * scale.λq
+    λvᵈ = u[6] * scale.λvᵈ
+
+    # Project only the private allocation at trial iterates, not the canonical variables.
+    policy = committedpolicy(model, max(xᶜ, eps(scale.xᶜ)), max(vᵈ, zero(vᵈ)), q, λq, λvᵈ; zguess=problem.policyguess(s))
     allocation = policy.allocation
     derivatives = policy.derivatives
     r = model.household.r
 
     ẋᶜ = allocation.investment
-    q̇ = r * physical.q - allocation.p
-    v̇ᵈ = r * physical.vᵈ - allocation.profit
+    q̇ = r * q - allocation.p
+    v̇ᵈ = r * vᵈ - allocation.profit
 
     # At q=c use the inactive limiting derivative; persistent boundary arcs require separate matching.
-    investmentderivative = physical.q > model.clean.c ? inv(model.clean.ξ) : zero(physical.q)
+    investmentderivative = ifelse(q > model.clean.c, inv(model.clean.ξ), zero(q))
 
-    λxᶜ = r * physical.λxᶜ - derivatives.welfare.xᶜ + physical.λq * derivatives.p.xᶜ + physical.λvᵈ * derivatives.profit.xᶜ
-    λq = -(model.clean.c + model.clean.ξ * allocation.investment + physical.λxᶜ) * investmentderivative
-    λvᵈ = -derivatives.welfare.vᵈ + physical.λq * derivatives.p.vᵈ + physical.λvᵈ * derivatives.profit.vᵈ
+    λ̇xᶜ = r * λxᶜ - derivatives.welfare.xᶜ + λq * derivatives.p.xᶜ + λvᵈ * derivatives.profit.xᶜ
+    λ̇q = -(model.clean.c + model.clean.ξ * allocation.investment + λxᶜ) * investmentderivative
+    λ̇vᵈ = -derivatives.welfare.vᵈ + λq * derivatives.p.vᵈ + λvᵈ * derivatives.profit.vᵈ
+
+    du[1] = horizon * ẋᶜ / scale.xᶜ
+    du[2] = horizon * q̇ / scale.q
+    du[3] = horizon * v̇ᵈ / scale.vᵈ
+    du[4] = horizon * λ̇xᶜ / scale.λxᶜ
+    du[5] = horizon * λ̇q / scale.λq
+    du[6] = horizon * λ̇vᵈ / scale.λvᵈ
 
     # The endpoint multipliers are unknown constants, not additional economic states.
-    derivative = CommittedState{eltype(physical)}(ẋᶜ, q̇, v̇ᵈ, λxᶜ, λq, λvᵈ, 0, 0, 0)
+    du[7] = 0.
+    du[8] = 0.
+    du[9] = 0.
 
-    CommittedState((horizon .* derivative ./ scale)...)
+    return du
 end
 
-function committedboundary(states, problem, grid)
+function committedboundary!(residual, states, problem::CommittedTransition, grid)
+    # The boundary conditions use endpoint mesh states without interpolating the path.
+    committedboundary!(residual, first(states), last(states), problem)
+end
+
+function committedboundary!(residual, initial, terminal, problem::CommittedTransition)
+    committedinitialboundary!(view(residual, 1:3), initial, problem)
+    committedterminalboundary!(view(residual, 4:9), terminal, problem)
+
+    return nothing
+end
+
+function committedinitialboundary!(residual, initial, problem::CommittedTransition)
+    residual[1] = (initial[1] * problem.scale.xᶜ - problem.xᶜ₀) / problem.scale.xᶜ
+    residual[2] = initial[5]
+    residual[3] = committedcomplementarity(initial[6], initial[3])
+
+    return nothing
+end
+
+function committedterminalboundary!(residual, terminal, problem::CommittedTransition)
     @unpack model, scale = problem
+    committedprogress!(problem.progress, :boundary)
 
-    initial = committedstate(states(first(grid)), problem)
-    terminal = committedstate(states(last(grid)), problem)
+    xᶜ = terminal[1] * scale.xᶜ
+    q = terminal[2] * scale.q
+    vᵈ = terminal[3] * scale.vᵈ
+    λxᶜ = terminal[4] * scale.λxᶜ
+    λq = terminal[5] * scale.λq
+    λvᵈ = terminal[6] * scale.λvᵈ
+    ψq = terminal[7] * scale.ψq
+    ψvᵈ = terminal[8] * scale.ψvᵈ
+    ψⁱ = terminal[9] * scale.ψⁱ
 
-    tail = committedpolicy(terminal, problem; tail=true, trial=true)
+    tail = committedpolicy(model, max(xᶜ, eps(scale.xᶜ)), max(vᵈ, zero(vᵈ)), min(q, model.clean.c), ψq, ψvᵈ; zguess=problem.policyguess(one(problem.horizon)))
     allocation = tail.allocation
     derivatives = tail.derivatives
     r = model.household.r
 
-    terminalλxᶜ = (derivatives.welfare.xᶜ - terminal.ψq * derivatives.p.xᶜ - terminal.ψvᵈ * derivatives.profit.xᶜ) / r
-    terminalλvᵈ = terminal.ψvᵈ + (derivatives.welfare.vᵈ - terminal.ψq * derivatives.p.vᵈ - terminal.ψvᵈ * derivatives.profit.vᵈ) / r
+    terminalλxᶜ = (derivatives.welfare.xᶜ - ψq * derivatives.p.xᶜ - ψvᵈ * derivatives.profit.xᶜ) / r
+    terminalλvᵈ = ψvᵈ + (derivatives.welfare.vᵈ - ψq * derivatives.p.vᵈ - ψvᵈ * derivatives.profit.vᵈ) / r
 
-    [((initial.xᶜ - problem.xᶜ₀) / scale.xᶜ), initial.λq / scale.λq, committedcomplementarity(initial.λvᵈ / scale.λvᵈ, initial.vᵈ / scale.vᵈ), (terminal.q - allocation.p / r) / scale.q, (terminal.vᵈ - allocation.profit / r) / scale.vᵈ, (terminal.λxᶜ - terminalλxᶜ) / scale.λxᶜ, (terminal.λq - terminal.ψq - terminal.ψⁱ) / scale.λq, (terminal.λvᵈ - terminalλvᵈ) / scale.λvᵈ, committedcomplementarity(terminal.ψⁱ / scale.ψⁱ, (model.clean.c - terminal.q) / scale.q)]
+    residual[1] = (q - allocation.p / r) / scale.q
+    residual[2] = (vᵈ - allocation.profit / r) / scale.vᵈ
+    residual[3] = (λxᶜ - terminalλxᶜ) / scale.λxᶜ
+    residual[4] = (λq - ψq - ψⁱ) / scale.λq
+    residual[5] = (λvᵈ - terminalλvᵈ) / scale.λvᵈ
+    residual[6] = committedcomplementarity(ψⁱ / scale.ψⁱ, (model.clean.c - q) / scale.q)
+
+    return nothing
 end
 
-function committedguess(problem::CommittedTransition, reference)
+function committedguess(problem::CommittedTransition{M, T}, reference) where {M, T}
     @unpack model, scale = problem
 
     x̄ᶜ = max(problem.xᶜ₀, reference.xᶜ)
@@ -162,14 +271,23 @@ function committedguess(problem::CommittedTransition, reference)
         vᵈ = (1 - s) * vᵈ₀ + s * reference.vᵈ
 
 
-        [xᶜ, q, vᵈ, terminalλxᶜ, 0, s * terminalλvᵈ, 0, 0, 0] ./ scale
+        T[xᶜ / scale.xᶜ, q / scale.q, vᵈ / scale.vᵈ, terminalλxᶜ / scale.λxᶜ, zero(T), s * terminalλvᵈ / scale.λvᵈ, zero(T), zero(T), zero(T)]
     end
     
     return guess
 end
 
-function committedguess(problem::CommittedTransition, previous::CommittedPath)
-    guess(parameters, s) = previous.solution(s) .* previous.problem.scale ./ problem.scale
+function committedguess(problem::CommittedTransition{M, T}, previous::CommittedPath) where {M, T}
+    guess = @closure (parameters, s) -> begin
+        state = previous.solution(s)
+        scaled = Vector{T}(undef, length(problem.scale))
+
+        @inbounds for i in eachindex(scaled, state, problem.scale)
+            scaled[i] = state[i] * previous.problem.scale[i] / problem.scale[i]
+        end
+
+        scaled
+    end
 
     guess
 end
@@ -179,15 +297,19 @@ function committedintegral(path, flow; tolerance=1e-8)
 
     integrand(s) = problem.horizon * exp(-problem.model.household.r * problem.horizon * s) * flow(committedallocation(path, s))
 
-    QuadGK.quadgk(integrand, path.solution.t...; rtol=tolerance, atol=tolerance)
+    QuadGK.quadgk(integrand, path.solution.t; rtol=tolerance, atol=tolerance)
 end
 
-function committeddiagnostics(path; nodes=161, tolerance=1e-8)
+function committeddiagnostics(path; nodes=161, tolerance=1e-8, verbose=false)
     @unpack model, horizon, scale = path.problem
 
-    grid = sort!(unique(vcat(range(0, 1; length=nodes), path.solution.t)))
+    started = time_ns()
+    if verbose
+        @info "Sampling committed policies for diagnostics" nodes=nodes
+    end
+    grid = sort!(unique(vcat(range(zero(horizon), one(horizon); length=nodes), path.solution.t)))
     states = map(s -> committedstate(path.solution(s), path.problem), grid)
-    policies = map(state -> committedpolicy(state, path.problem), states)
+    policies = map((state, s) -> committedpolicy(state, path.problem, s), states, grid)
     allocations = map(policy -> policy.allocation, policies)
 
     initial = first(states)
@@ -205,37 +327,62 @@ function committeddiagnostics(path; nodes=161, tolerance=1e-8)
     interiorprofit = maximum(a -> 0 < a.xᵈ < model.dirty.kᵈ ? abs(a.profit - model.dirty.γᵈ * a.xᵈ^2 / 2) : zero(a.profit), allocations)
     irreversibility = max(-minimum(diff(map(state -> state.xᶜ, states))), 0)
 
+    if verbose
+        @info "Checking private present values" elapsed=(time_ns() - started) / 1e9 samples=length(grid)
+    end
     cleanflow = first(committedintegral(path, a -> a.p; tolerance))
     dirtyflow = first(committedintegral(path, a -> a.profit; tolerance))
     cleanvaluation = abs(initial.q - cleanflow - exp(-r * horizon) * tailallocation.p / r)
     dirtyvaluation = abs(initial.vᵈ - dirtyflow - exp(-r * horizon) * tailallocation.profit / r)
 
-    boundary = maximum(abs, committedboundary(path.solution, path.problem, (0.0, 1.0)))
+    if verbose
+        @info "Checking canonical and boundary residuals" elapsed=(time_ns() - started) / 1e9
+    end
+    residual = zeros(eltype(scale), length(scale))
+    committedboundary!(residual, first(path.solution.u), last(path.solution.u), path.problem)
+    boundary = maximum(abs, residual)
     midpoints = (path.solution.t[1:end-1] + path.solution.t[2:end]) / 2
-    canonical = maximum(s -> maximum(abs, path.solution(s, Val{1}) - committeddynamics(path.solution(s), path.problem, s)) / horizon, midpoints)
+    canonical = zero(horizon)
+
+    for s in midpoints
+        state = path.solution(s)
+        derivative = path.solution(s, Val{1})
+        committeddynamics!(residual, state, path.problem, s)
+
+        @inbounds for i in eachindex(residual, derivative)
+            canonical = max(canonical, abs(derivative[i] - residual[i]) / horizon)
+        end
+    end
 
     hamiltoniankkt = maximum(policy -> policy.foc, policies)
     tailhamiltoniankkt = tail.foc
-    candidatemargin = minimum(policy -> policy.gap, policies)
+    if verbose
+        @info "Comparing policy boundary Hamiltonians" elapsed=(time_ns() - started) / 1e9
+    end
+    boundarygap = maximum(i -> committedboundarygap(model, policies[i], states[i].λq, states[i].λvᵈ), eachindex(policies))
+    tailboundarygap = committedboundarygap(model, tail, terminal.ψq, terminal.ψvᵈ)
 
     initialcomplementarity = abs(committedcomplementarity(initial.λvᵈ / scale.λvᵈ, initial.vᵈ / scale.vᵈ))
     tailcomplementarity = abs(committedcomplementarity(terminal.ψⁱ / scale.ψⁱ, (model.clean.c - terminal.q) / scale.q))
     tailinvestment = cleaninvestment(terminal.q, model.clean)
 
-    values = promote(market, credit, complementarity, investmentkkt, dirtykkt, interiorprofit, irreversibility, cleanvaluation, dirtyvaluation, boundary, canonical, hamiltoniankkt, tailhamiltoniankkt, candidatemargin, initialcomplementarity, tailcomplementarity, tailinvestment, tail.tax - last(policies).tax, tailallocation.p - last(allocations).p, minimum(state -> state.q, states), minimum(state -> state.vᵈ, states), minimum(state -> state.xᶜ, states))
     investmentboundarypoints = count(state -> abs(state.q - model.clean.c) <= 64 * eps(model.clean.c), states)
 
-    CommittedDiagnostics(values..., count(policy -> policy.singular, policies), investmentboundarypoints)
+    CommittedDiagnostics{eltype(scale)}(market, credit, complementarity, investmentkkt, dirtykkt, interiorprofit, irreversibility, cleanvaluation, dirtyvaluation, boundary, canonical, hamiltoniankkt, tailhamiltoniankkt, boundarygap, tailboundarygap, initialcomplementarity, tailcomplementarity, tailinvestment, tail.tax - last(policies).tax, tailallocation.p - last(allocations).p, minimum(state -> state.q, states), minimum(state -> state.vᵈ, states), minimum(state -> state.xᶜ, states), count(policy -> policy.singular, policies), investmentboundarypoints)
 end
 
-"Collocate the canonical system with a pointwise Hamiltonian policy and optimal stationary continuation."
-function solvecommitted(model, xᶜ₀; options=CommittedOptions(), guess=nothing)
+"Collocate the canonical system on one stationary policy branch and check optimality ex post."
+function solvecommitted(model, xᶜ₀::T; options=CommittedOptions(), guess=nothing) where T
     @unpack household, firm, clean, dirty = model
+    started = time_ns()
 
     if !(firm isa CESFirm && firm.ρ < 1) || firm.ρ ≈ 0
         error("The committed canonical solver requires CES production with ρ < 1 and ρ ≠ 0.")
     end
 
+    if options.verbose
+        @info "Preparing committed BVP" horizon=options.horizon nodes=options.nodes tolerance=options.tolerance
+    end
     reference = committedstationary(model, options.initialtax)
     
     xᶜscale = max(xᶜ₀, dirty.kᵈ)
@@ -245,7 +392,9 @@ function solvecommitted(model, xᶜ₀; options=CommittedOptions(), guess=nothin
 
     scale = CommittedState(xᶜscale, qscale, vᵈscale, costscale / xᶜscale, costscale / qscale, costscale / vᵈscale, costscale / qscale, costscale / vᵈscale, costscale / qscale)
     
-    problem = CommittedTransition(model, options.horizon, xᶜ₀, options.initialtax, scale)
+    policyguess = guess isa CommittedPath ? committedpolicyguess(guess) : (@closure s -> reference.z)
+    progress = options.verbose && options.loginterval > 0 ? CommittedProgress(time_ns(), options.loginterval) : nothing
+    problem = CommittedTransition(model, options.horizon, xᶜ₀, options.initialtax, scale, policyguess, progress)
 
     initialguess = if isnothing(guess)
         committedguess(problem, reference)
@@ -255,28 +404,77 @@ function solvecommitted(model, xᶜ₀; options=CommittedOptions(), guess=nothin
         guess
     end
 
-    bvp = SciMLBase.BVProblem(committeddynamics, committedboundary, initialguess, (0.0, 1.0), problem)
+    bvpfunction = SciMLBase.BVPFunction{true}(committeddynamics!, (committedinitialboundary!, committedterminalboundary!); bcresid_prototype=(zeros(T, 3), zeros(T, 6)), twopoint=Val(true))
+    bvp = SciMLBase.TwoPointBVProblem(bvpfunction, initialguess, (zero(T), one(T)), problem)
 
-    # Analytical static derivatives enter the costates; finite differences form the collocation Jacobian.
-    jacobian = BoundaryValueDiffEq.BVPJacobianAlgorithm(ADTypes.AutoFiniteDiff())
+    # Colour the known collocation sparsity rather than perturbing every mesh unknown separately.
+    jacobian = BVD.BVPJacobianAlgorithm(ADTypes.AutoSparse(ADTypes.AutoFiniteDiff()))
+    verbosity = if options.solverlogging
+        BVD.BVPVerbosity(SciMLLogging.All())
+    elseif options.verbose
+        BVD.BVPVerbosity(SciMLLogging.Minimal())
+    else
+        BVD.BVPVerbosity(SciMLLogging.None())
+    end
 
-    solution = BoundaryValueDiffEq.solve(bvp, BoundaryValueDiffEq.MIRK4(; jac_alg=jacobian); dt=1 / (options.nodes - 1), abstol=options.tolerance, reltol=options.tolerance)
-    SciMLBase.successful_retcode(solution) || error("Committed state–costate BVP failed: $(solution.retcode).")
+    collocationstarted = time_ns()
+    if options.verbose
+        @info "Solving committed BVP with sparse finite differences" preparation=(collocationstarted - started) / 1e9
+    end
+    solution = try
+        BVD.solve(bvp, BVD.MIRK4(; jac_alg=jacobian); dt=inv(options.nodes - 1), abstol=options.tolerance, reltol=options.tolerance, verbose=verbosity)
+    finally
+        isnothing(progress) || (progress.active[] = false)
+    end
+    if options.verbose
+        @info "Committed collocation finished" elapsed=(time_ns() - collocationstarted) / 1e9 retcode=solution.retcode meshpoints=length(solution.t)
+        if !isnothing(progress)
+            @info "Committed collocation work" dynamics=progress.dynamics[] boundaries=progress.boundaries[]
+        end
+    end
+    if !SciMLBase.successful_retcode(solution)
+        error("Committed state–costate BVP failed: $(solution.retcode).")
+    end
 
-    sampled = map(s -> committedstate(solution(s), problem), range(0, 1; length=2 * options.nodes - 1))
+    sampled = map(s -> committedstate(solution(s), problem), range(zero(T), one(T); length=2 * options.nodes - 1))
     minimum(state -> state.xᶜ, sampled) > zero(xᶜ₀) || error("Committed canonical solution returned non-positive clean capacity.")
     minimum(state -> min(state.q / scale.q, state.vᵈ / scale.vᵈ), sampled) >= -10 * options.tolerance || error("Committed canonical solution returned negative private valuations.")
 
-    path = CommittedPath(problem, solution, 0.0, 0.0)
+    path = CommittedPath(problem, solution, zero(T), zero(T))
     tail = committedtail(path).allocation
+    quadraturestarted = time_ns()
+    if options.verbose
+        @info "Integrating committed welfare"
+    end
     flowcost, quadratureerror = committedintegral(path, a -> a.welfare; tolerance=options.tolerance)
 
     tailcost = exp(-household.r * options.horizon) * tail.welfare / household.r
     path = CommittedPath(problem, solution, flowcost + tailcost, quadratureerror)
 
-    diagnostics = committeddiagnostics(path; nodes=2 * options.nodes - 1, tolerance=options.tolerance)
-    diagnostics.tailinvestment <= options.tailtolerance || error("Terminal investment is $(diagnostics.tailinvestment); the stationary continuation is infeasible.")
-    diagnostics.boundary <= 100 * options.tolerance || error("Committed endpoint residual is $(diagnostics.boundary); inspect the canonical boundary conditions.")
+    if options.verbose
+        @info "Committed welfare integral finished" elapsed=(time_ns() - quadraturestarted) / 1e9 cost=path.cost quadratureerror=quadratureerror
+    end
+    diagnosticsstarted = time_ns()
+    diagnostics = committeddiagnostics(path; nodes=2options.nodes - 1, tolerance=options.tolerance, verbose=options.verbose)
+    if options.verbose
+        @info "Committed diagnostics finished" elapsed=(time_ns() - diagnosticsstarted) / 1e9 boundary=diagnostics.boundary canonical=diagnostics.canonical boundarygap=diagnostics.boundarygap tailboundarygap=diagnostics.tailboundarygap
+    end
+
+    if !(diagnostics.tailinvestment ≤ options.tailtolerance)
+        error("Terminal investment is $(diagnostics.tailinvestment); the stationary continuation is infeasible.")
+    end
+
+    if !(diagnostics.boundary ≤ 100options.tolerance)
+        error("Committed endpoint residual is $(diagnostics.boundary); inspect the canonical boundary conditions.")
+    end
+
+    if max(diagnostics.boundarygap, diagnostics.tailboundarygap) > options.tolerance
+        @warn "A policy boundary or nearby ratio improves the Hamiltonian; the selected branch is not verified optimal." boundarygap=diagnostics.boundarygap tailboundarygap=diagnostics.tailboundarygap
+    end
+
+    if options.verbose
+        @info "Committed solve finished" elapsed=(time_ns() - started) / 1e9
+    end
 
     CommittedSolution(path, diagnostics)
 end
