@@ -7,6 +7,7 @@ import ADTypes
 import SciMLBase
 import SciMLLogging
 import BoundaryValueDiffEq as BVD
+import NonlinearSolve
 import QuadGK
 import Roots
 
@@ -28,6 +29,7 @@ includet("../src/solve/model.jl")
 
 includet("../src/solve/committed/allocation.jl")
 includet("../src/solve/committed/policy.jl")
+includet("../src/solve/committed/tail.jl")
 includet("../src/solve/committed/solve.jl")
 
 calibration = Calibration()

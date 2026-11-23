@@ -53,7 +53,7 @@ function committedratiolowerbound(model, xᶜ, vᵈ)
     L̄ = lendinglimit(vᵈ, bank)
     nmax = (L̄ / (bank.δᴸ * household.ν))^inv(1 + inversefrisch(household))
 
-    return min(1e-3, xᶜ / (2 * nmax))
+    return max(eps(one(float(xᶜ))), min(1e-3, xᶜ / (2 * nmax)))
 end
 
 "Competitive transition allocation with q determined by future prices."

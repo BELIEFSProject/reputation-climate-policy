@@ -40,8 +40,8 @@ function committedprogress!(progress::CommittedProgress, phase)
     return nothing
 end
 
-"Six canonical variables and three constant terminal-constraint multipliers."
-struct CommittedState{T} <: StaticArrays.FieldVector{9, T}
+"Three private states and their current-value costates."
+struct CommittedState{T} <: StaticArrays.FieldVector{6, T}
     # State
     xᶜ::T
     q::T
@@ -51,14 +51,9 @@ struct CommittedState{T} <: StaticArrays.FieldVector{9, T}
     λxᶜ::T
     λq::T
     λvᵈ::T
-
-    # Terminal multipliers
-    ψq::T
-    ψvᵈ::T
-    ψⁱ::T
 end
 
-StaticArrays.similar_type(::Type{<:CommittedState}, ::Type{T}, ::StaticArrays.Size{(9,)}) where {T} = CommittedState{T}
+StaticArrays.similar_type(::Type{<:CommittedState}, ::Type{T}, ::StaticArrays.Size{(6,)}) where {T} = CommittedState{T}
 
 struct CommittedTransition{M, T, G, P}
     model::M
@@ -114,13 +109,13 @@ function committedstate(state::AbstractVector, problem::CommittedTransition)
     scale = problem.scale
     T = promote_type(eltype(state), eltype(scale))
 
-    CommittedState{T}(state[1] * scale.xᶜ, state[2] * scale.q, state[3] * scale.vᵈ, state[4] * scale.λxᶜ, state[5] * scale.λq, state[6] * scale.λvᵈ, state[7] * scale.ψq, state[8] * scale.ψvᵈ, state[9] * scale.ψⁱ)
+    CommittedState{T}(state[1] * scale.xᶜ, state[2] * scale.q, state[3] * scale.vᵈ, state[4] * scale.λxᶜ, state[5] * scale.λq, state[6] * scale.λvᵈ)
 end
 
 committedcomplementarity(a, b) = hypot(a, b) - a - b
 
 function committedpolicy(state::CommittedState, problem::CommittedTransition, s)
-    committedpolicy(problem.model, state.xᶜ, state.vᵈ, state.q, state.λq, state.λvᵈ; zguess=problem.policyguess(s))
+    committedpolicy(problem.model, max(state.xᶜ, eps(problem.scale.xᶜ)), max(state.vᵈ, zero(state.vᵈ)), state.q, state.λq, state.λvᵈ; zguess=problem.policyguess(s))
 end
 
 function committedpolicy(path::CommittedPath, s)
@@ -134,8 +129,15 @@ committedallocation(path::CommittedPath, s) = committedpolicy(path, s).allocatio
 function committedtail(path::CommittedPath)
     problem = path.problem
     state = committedstate(last(path.solution.u), problem)
+    allocation = committedtail(problem.model, state.xᶜ, state.vᵈ, state.q)
+    geometry = committedgeometry(problem.model, allocation.z, allocation.vᵈ)
+    ψq, ψvᵈ, _ = committedtailmultipliers(problem.model, allocation, state.λxᶜ, state.λq, geometry)
+    τ = (allocation.p - problem.model.dirty.γᵈ * allocation.xᵈ) / problem.model.dirty.η
+    derivatives, foc, creditkink, dirtykink, singular = committedpolicyderivatives(problem.model, allocation, τ, ψq, ψvᵈ, geometry)
+    hamiltonian = committedflow(problem.model, allocation) - ψq * allocation.p - ψvᵈ * allocation.profit
+    T = promote_type(typeof(τ), typeof(hamiltonian), typeof(foc))
 
-    committedpolicy(problem.model, state.xᶜ, state.vᵈ, min(state.q, problem.model.clean.c), state.ψq, state.ψvᵈ; zguess=problem.policyguess(one(problem.horizon)))
+    CommittedPolicy{typeof(allocation), typeof(derivatives), T}(allocation, τ, derivatives, hamiltonian, foc, creditkink, dirtykink, singular)
 end
 
 "Freeze the previous policy branch as a deterministic, interpolated root reference."
@@ -187,11 +189,6 @@ function committeddynamics!(du, u, problem::CommittedTransition, s)
     du[5] = horizon * λ̇q / scale.λq
     du[6] = horizon * λ̇vᵈ / scale.λvᵈ
 
-    # The endpoint multipliers are unknown constants, not additional economic states.
-    du[7] = 0.
-    du[8] = 0.
-    du[9] = 0.
-
     return du
 end
 
@@ -202,7 +199,7 @@ end
 
 function committedboundary!(residual, initial, terminal, problem::CommittedTransition)
     committedinitialboundary!(view(residual, 1:3), initial, problem)
-    committedterminalboundary!(view(residual, 4:9), terminal, problem)
+    committedterminalboundary!(view(residual, 4:6), terminal, problem)
 
     return nothing
 end
@@ -225,24 +222,13 @@ function committedterminalboundary!(residual, terminal, problem::CommittedTransi
     λxᶜ = terminal[4] * scale.λxᶜ
     λq = terminal[5] * scale.λq
     λvᵈ = terminal[6] * scale.λvᵈ
-    ψq = terminal[7] * scale.ψq
-    ψvᵈ = terminal[8] * scale.ψvᵈ
-    ψⁱ = terminal[9] * scale.ψⁱ
+    allocation = committedtail(model, xᶜ, vᵈ, q)
+    ∂q, ∂g = committedtailderivatives(model, allocation)
 
-    tail = committedpolicy(model, max(xᶜ, eps(scale.xᶜ)), max(vᵈ, zero(vᵈ)), min(q, model.clean.c), ψq, ψvᵈ; zguess=problem.policyguess(one(problem.horizon)))
-    allocation = tail.allocation
-    derivatives = tail.derivatives
-    r = model.household.r
-
-    terminalλxᶜ = (derivatives.welfare.xᶜ - ψq * derivatives.p.xᶜ - ψvᵈ * derivatives.profit.xᶜ) / r
-    terminalλvᵈ = ψvᵈ + (derivatives.welfare.vᵈ - ψq * derivatives.p.vᵈ - ψvᵈ * derivatives.profit.vᵈ) / r
-
-    residual[1] = (q - allocation.p / r) / scale.q
-    residual[2] = (vᵈ - allocation.profit / r) / scale.vᵈ
-    residual[3] = (λxᶜ - terminalλxᶜ) / scale.λxᶜ
-    residual[4] = (λq - ψq - ψⁱ) / scale.λq
-    residual[5] = (λvᵈ - terminalλvᵈ) / scale.λvᵈ
-    residual[6] = committedcomplementarity(ψⁱ / scale.ψⁱ, (model.clean.c - q) / scale.q)
+    # Cross-multiplication avoids dividing by ∂q.vᵈ at a fold of stationary tails.
+    residual[1] = (q - allocation.p / model.household.r) / scale.q
+    residual[2] = (∂q.xᶜ * scale.xᶜ / scale.q) * (λvᵈ - ∂g.vᵈ) / scale.λvᵈ - (∂q.vᵈ * scale.vᵈ / scale.q) * (λxᶜ - ∂g.xᶜ) / scale.λxᶜ
+    residual[3] = committedcomplementarity((∂g.xᶜ - λxᶜ - ∂q.xᶜ * λq) / scale.λxᶜ, (model.clean.c - q) / scale.q)
 
     return nothing
 end
@@ -254,24 +240,27 @@ function committedguess(problem::CommittedTransition{M, T}, reference) where {M,
     
     terminal = committedmarketallocation(model, x̄ᶜ, reference.vᵈ, model.clean.c, problem.initialtax)
     initial = committedmarketallocation(model, problem.xᶜ₀, reference.vᵈ, model.clean.c, problem.initialtax)
-    derivatives = committedstaticderivatives(model, terminal, problem.initialtax)
+    tail = committedtail(model, x̄ᶜ, reference.vᵈ, model.clean.c)
+    _, ∂g = committedtailderivatives(model, tail)
     
     r = model.household.r
 
     q₀ = max(initial.p / r, model.clean.c)
     vᵈ₀ = initial.profit / r
 
-    terminalλxᶜ = derivatives.welfare.xᶜ / r
-    terminalλvᵈ = derivatives.welfare.vᵈ / r
+    terminalλxᶜ = ∂g.xᶜ
+    terminalλvᵈ = ∂g.vᵈ
+    # Avoid starting exactly at the non-differentiable investment threshold.
+    terminalq = terminal.p / r + model.clean.c * cbrt(eps(one(T)))
 
     # Frozen-flow values initialise the guess only; initial asset values remain endogenous.
     guess = @closure (parameters, s) -> begin
         xᶜ = (1 - s) * problem.xᶜ₀ + s * x̄ᶜ
-        q = (1 - s) * q₀ + s * terminal.p / r
+        q = (1 - s) * q₀ + s * terminalq
         vᵈ = (1 - s) * vᵈ₀ + s * reference.vᵈ
 
 
-        T[xᶜ / scale.xᶜ, q / scale.q, vᵈ / scale.vᵈ, terminalλxᶜ / scale.λxᶜ, zero(T), s * terminalλvᵈ / scale.λvᵈ, zero(T), zero(T), zero(T)]
+        T[xᶜ / scale.xᶜ, q / scale.q, vᵈ / scale.vᵈ, terminalλxᶜ / scale.λxᶜ, zero(T), s * terminalλvᵈ / scale.λvᵈ]
     end
     
     return guess
@@ -316,6 +305,7 @@ function committeddiagnostics(path; nodes=161, tolerance=1e-8, verbose=false)
     terminal = last(states)
     tail = committedtail(path)
     tailallocation = tail.allocation
+    ψq, ψvᵈ, ψⁱ = committedtailmultipliers(model, tailallocation, terminal.λxᶜ, terminal.λq)
     r = model.household.r
 
     market = maximum(a -> abs(a.x - a.xᶜ - a.xᵈ), allocations)
@@ -360,10 +350,10 @@ function committeddiagnostics(path; nodes=161, tolerance=1e-8, verbose=false)
         @info "Comparing policy boundary Hamiltonians" elapsed=(time_ns() - started) / 1e9
     end
     boundarygap = maximum(i -> committedboundarygap(model, policies[i], states[i].λq, states[i].λvᵈ), eachindex(policies))
-    tailboundarygap = committedboundarygap(model, tail, terminal.ψq, terminal.ψvᵈ)
+    tailboundarygap = committedboundarygap(model, tail, ψq, ψvᵈ)
 
     initialcomplementarity = abs(committedcomplementarity(initial.λvᵈ / scale.λvᵈ, initial.vᵈ / scale.vᵈ))
-    tailcomplementarity = abs(committedcomplementarity(terminal.ψⁱ / scale.ψⁱ, (model.clean.c - terminal.q) / scale.q))
+    tailcomplementarity = abs(committedcomplementarity(ψⁱ / scale.λq, (model.clean.c - terminal.q) / scale.q))
     tailinvestment = cleaninvestment(terminal.q, model.clean)
 
     investmentboundarypoints = count(state -> abs(state.q - model.clean.c) <= 64 * eps(model.clean.c), states)
@@ -375,6 +365,8 @@ end
 function solvecommitted(model, xᶜ₀::T; options=CommittedOptions(), guess=nothing) where T
     @unpack household, firm, clean, dirty = model
     started = time_ns()
+
+    xᶜ₀ >= zero(T) || error("The committed solver requires non-negative initial clean capacity.")
 
     if !(firm isa CESFirm && firm.ρ < 1) || firm.ρ ≈ 0
         error("The committed canonical solver requires CES production with ρ < 1 and ρ ≠ 0.")
@@ -390,7 +382,7 @@ function solvecommitted(model, xᶜ₀::T; options=CommittedOptions(), guess=not
     vᵈscale = dirty.γᵈ * dirty.kᵈ^2 / 2household.r
     costscale = reference.y / household.r
 
-    scale = CommittedState(xᶜscale, qscale, vᵈscale, costscale / xᶜscale, costscale / qscale, costscale / vᵈscale, costscale / qscale, costscale / vᵈscale, costscale / qscale)
+    scale = CommittedState(xᶜscale, qscale, vᵈscale, costscale / xᶜscale, costscale / qscale, costscale / vᵈscale)
     
     policyguess = guess isa CommittedPath ? committedpolicyguess(guess) : (@closure s -> reference.z)
     progress = options.verbose && options.loginterval > 0 ? CommittedProgress(time_ns(), options.loginterval) : nothing
@@ -404,11 +396,13 @@ function solvecommitted(model, xᶜ₀::T; options=CommittedOptions(), guess=not
         guess
     end
 
-    bvpfunction = SciMLBase.BVPFunction{true}(committeddynamics!, (committedinitialboundary!, committedterminalboundary!); bcresid_prototype=(zeros(T, 3), zeros(T, 6)), twopoint=Val(true))
+    bvpfunction = SciMLBase.BVPFunction{true}(committeddynamics!, (committedinitialboundary!, committedterminalboundary!); bcresid_prototype=(zeros(T, 3), zeros(T, 3)), twopoint=Val(true))
     bvp = SciMLBase.TwoPointBVProblem(bvpfunction, initialguess, (zero(T), one(T)), problem)
 
     # Colour the known collocation sparsity rather than perturbing every mesh unknown separately.
     jacobian = BVD.BVPJacobianAlgorithm(ADTypes.AutoSparse(ADTypes.AutoFiniteDiff()))
+    # Damp nonlinear steps rather than starting with unrestricted Gauss–Newton updates.
+    nonlinear = NonlinearSolve.LevenbergMarquardt(; disable_geodesic=Val(true))
     verbosity = if options.solverlogging
         BVD.BVPVerbosity(SciMLLogging.All())
     elseif options.verbose
@@ -422,7 +416,7 @@ function solvecommitted(model, xᶜ₀::T; options=CommittedOptions(), guess=not
         @info "Solving committed BVP with sparse finite differences" preparation=(collocationstarted - started) / 1e9
     end
     solution = try
-        BVD.solve(bvp, BVD.MIRK4(; jac_alg=jacobian); dt=inv(options.nodes - 1), abstol=options.tolerance, reltol=options.tolerance, verbose=verbosity)
+        BVD.solve(bvp, BVD.MIRK4(; jac_alg=jacobian, nlsolve=nonlinear); dt=inv(options.nodes - 1), abstol=options.tolerance, reltol=options.tolerance, verbose=verbosity)
     finally
         isnothing(progress) || (progress.active[] = false)
     end
@@ -437,11 +431,16 @@ function solvecommitted(model, xᶜ₀::T; options=CommittedOptions(), guess=not
     end
 
     sampled = map(s -> committedstate(solution(s), problem), range(zero(T), one(T); length=2 * options.nodes - 1))
-    minimum(state -> state.xᶜ, sampled) > zero(xᶜ₀) || error("Committed canonical solution returned non-positive clean capacity.")
+    minimum(state -> state.xᶜ, sampled) >= -10 * options.tolerance * scale.xᶜ || error("Committed canonical solution returned negative clean capacity.")
     minimum(state -> min(state.q / scale.q, state.vᵈ / scale.vᵈ), sampled) >= -10 * options.tolerance || error("Committed canonical solution returned negative private valuations.")
 
     path = CommittedPath(problem, solution, zero(T), zero(T))
+    terminal = committedstate(last(solution.u), problem)
+    terminal.vᵈ > zero(T) || error("The six-dimensional terminal reduction requires positive dirty value; a shutdown tail needs separate corner conditions.")
     tail = committedtail(path).allocation
+    tailoutput = sqrt(2household.r * terminal.vᵈ / dirty.γᵈ)
+    tailtax = (tail.p - dirty.γᵈ * tailoutput) / dirty.η
+    zero(T) < tailoutput < dirty.kᵈ && tailtax > zero(T) || error("The six-dimensional terminal reduction requires interior dirty output and a positive tail tax; recovered output=$(tailoutput), tax=$(tailtax).")
     quadraturestarted = time_ns()
     if options.verbose
         @info "Integrating committed welfare"
