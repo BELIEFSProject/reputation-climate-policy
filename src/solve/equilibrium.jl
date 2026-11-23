@@ -1,6 +1,6 @@
 "Constrained and unconstrained labour supply at energy-labour ratio `z`."
-function labour(z, barL, household::AbstractHousehold, firm::AbstractFirm, deltaL, r)
-    constrained = ((1 - firm.α) * barL / (deltaL * household.ν * f(z, firm)))^inv(1 + inversefrisch(household))
+function labour(z, L̄, household::AbstractHousehold, firm::AbstractFirm, deltaL, r)
+    constrained = ((1 - firm.α) * L̄ / (deltaL * household.ν * f(z, firm)))^inv(1 + inversefrisch(household))
     unconstrained = unconstrainedlabour(z, household, firm, r, deltaL)
     min(constrained, unconstrained)
 end

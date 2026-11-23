@@ -21,11 +21,9 @@ Base.@kwdef struct Calibration{T <: Real}
     cˣ::T = 4.0
     ξˣ::T = 100.0
     υ::T = 0.25
-    δL::T = 0.25
+    δᴸ::T = 0.25
     κₗ::T = 0.10
     κᵈᵇ::T = 0.20
     θ::T = 0.01
     k̄::T = 0.018
 end
-
-Calibration(values::Real...) = Calibration{promote_type(map(typeof, values)...)}(values...)
