@@ -52,7 +52,7 @@ dirtysupply(z, n, expectedtax, household, firm, dirty) = dirtyoutput(energyprice
 energymarketresidual(z, n, xc, expectedtax, household, firm, dirty) = energydemand(z, n) - xc - dirtysupply(z, n, expectedtax, household, firm, dirty)
 
 "Government welfare cost in the general-equilibrium model."
-function welfarecost(n, xd, xc_dot, xc, y, household::AbstractHousehold, dirty::DirtyEnergy, clean::CleanEnergy, υ, γ)
+function welfarecost(n, xd, h, investment, xc, y, household::AbstractHousehold, dirty::DirtyEnergy, clean::CleanEnergy, government::Government, γ)
     νcost = household isa LinearHousehold ? household.ν * n^2 / 2 : v(n, household)
-    νcost + υ * xd^2 / 2 + clean.c * xc_dot + clean.ξ * xc_dot^2 / 2 - y * (1 - γ * dirty.η * xd)
+    νcost + government.υ * xd^2 / 2 + clean.c * investment + clean.ξ * investment^2 / 2 + dirty.ζ * h^2 / 2 - y * (1 - γ * (dirty.η * xd - h))
 end

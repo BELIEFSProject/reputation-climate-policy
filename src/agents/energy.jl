@@ -4,30 +4,42 @@ struct DirtyEnergy{T <: Real} <: AbstractDirtyEnergy{T}
     kᵈ::T
     γᵈ::T
     η::T
+    ζ::T
 end
 
-function DirtyEnergy(; calibration = Calibration(),
-                     kᵈ = calibration.kᵈ,
-                     γᵈ = calibration.γᵈ,
-                     η = calibration.η)
-    return DirtyEnergy(promote(kᵈ, γᵈ, η)...)
+function DirtyEnergy(; calibration = Calibration(), kᵈ = calibration.kᵈ, γᵈ = calibration.γᵈ, η = calibration.η, ζ = calibration.ζ)
+    return DirtyEnergy(promote(kᵈ, γᵈ, η, ζ)...)
 end
 
 DirtyEnergy(calibration::Calibration; kwargs...) =
     DirtyEnergy(; calibration, kwargs...)
 
-function dirtyoutput(p, τᵉ, de::DirtyEnergy)
-    clamp((p - de.η * τᵉ) / de.γᵈ, 0, de.kᵈ)
+function dirtyoutput(p, expectedtax, de::DirtyEnergy)
+    clamp(max((p - de.η * expectedtax) / de.γᵈ, p / (de.γᵈ + de.ζ * de.η^2)), zero(p + expectedtax), de.kᵈ)
 end
 
-"Dirty-sector profit at a given utilisation rate."
-function dirtyprofit(p, τᵉ, xd, de::DirtyEnergy)
-    (p - de.η * τᵉ) * xd - de.γᵈ * xd^2 / 2
+"Compliance chosen before the levy increment, from its conditional expected rate."
+dirtyabatement(expectedtax, xd, de::DirtyEnergy) = clamp(expectedtax / de.ζ, zero(expectedtax + xd), de.η * xd)
+
+dirtyemissions(expectedtax, xd, de::DirtyEnergy) = de.η * xd - dirtyabatement(expectedtax, xd, de)
+
+"Conditional mean dirty cash flow, including abatement and avoided permit payments."
+function dirtyprofit(p, expectedtax, xd, de::DirtyEnergy)
+    h = dirtyabatement(expectedtax, xd, de)
+    (p - de.η * expectedtax) * xd - de.γᵈ * xd^2 / 2 + expectedtax * h - de.ζ * h^2 / 2
 end
 
 "Constant-policy present value of dirty-sector profits."
-function dirtyvalue(p, τᵉ, xd, r, de::DirtyEnergy)
-    dirtyprofit(p, τᵉ, xd, de) / r
+function dirtyvalue(p, expectedtax, xd, r, de::DirtyEnergy)
+    dirtyprofit(p, expectedtax, xd, de) / r
+end
+
+"Inverse permit demand at a given energy price; zero prices allow excess issuance."
+function permitprice(a, p, de::DirtyEnergy)
+    if a < 0
+        throw(DomainError(a, "Permit issuance must be non-negative."))
+    end
+    max(min(de.ζ * (de.η * p - de.γᵈ * a) / (de.γᵈ + de.ζ * de.η^2), de.ζ * (de.η * de.kᵈ - a)), zero(a + p))
 end
 
 abstract type AbstractCleanEnergy{T <: Real} end
@@ -51,5 +63,7 @@ function cleaninvestment(qᵉ, ce::CleanEnergy)
 end
 
 "Constant-policy clean marginal investment value."
-cleanmarginalvalue(p, xc_dot, r, ce::CleanEnergy) =
-    (p - ce.c * xc_dot) / r
+cleanmarginalvalue(p, investment, r, ce::CleanEnergy) = p / r
+
+"Clean equity cash flow, after installation and adjustment spending."
+cleanprofit(p, xᶜ, investment, clean::CleanEnergy) = p * xᶜ - clean.c * investment - clean.ξ * investment^2 / 2
